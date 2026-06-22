@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "router-provisioner"
+version = "0.1.0"
+description = "Cross-platform provisioning and automation tool for OpenWrt routers."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "anfixit" },
+]
+keywords = [
+    "openwrt",
+    "router",
+    "provisioning",
+    "automation",
+    "amneziawg",
+    "podkop",
+]
+dependencies = [
+    "pydantic>=2.11,<3",
+    "pyyaml>=6.0,<7",
+    "rich>=14.0,<15",
+    "typer>=0.16,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.16,<2",
+    "pytest>=8.4,<9",
+    "pytest-cov>=6.2,<7",
+    "ruff>=0.12,<1",
+]
+
+[project.scripts]
+router-provisioner = "router_provisioner.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/router_provisioner"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "SIM",
+]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+warn_unused_configs = true
