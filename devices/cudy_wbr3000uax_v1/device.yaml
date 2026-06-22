@@ -1,0 +1,26 @@
+schema_version: 1
+device_id: cudy_wbr3000uax_v1
+vendor: Cudy
+model: WBR3000UAX
+hardware_version: v1
+openwrt_board_names:
+  - cudy,wbr3000uax-v1
+  - cudy,wbr3000uax-v1-ubootmod
+supported_layouts:
+  - factory
+  - ubootmod
+default_factory_ip: 192.168.10.1
+default_openwrt_ip: 192.168.1.1
+firmware:
+  - role: preloader
+    filename: openwrt-25.12.4-mediatek-filogic-cudy_wbr3000uax-v1-ubootmod-preloader.bin
+    sha256: 3eb3fb83edb5eb008b9ac8cf8f31a9d6eb65d1093edff749d4763aca4d96945c
+  - role: uboot
+    filename: openwrt-25.12.4-mediatek-filogic-cudy_wbr3000uax-v1-ubootmod-bl31-uboot.fip
+    sha256: d7fcfca879ec77bd47e9c470b974f7cccc166b1b429cadf9ca12d410b25977c0
+  - role: recovery
+    filename: openwrt-25.12.4-mediatek-filogic-cudy_wbr3000uax-v1-ubootmod-initramfs-recovery.itb
+    sha256: 075a1088b7de983900b4d04b698a6872d2e1ab75d3cf4b9d9dfc1f4ff678d12c
+  - role: sysupgrade
+    filename: openwrt-25.12.4-mediatek-filogic-cudy_wbr3000uax-v1-ubootmod-squashfs-sysupgrade.itb
+    sha256: 97ec9a4dc45f11db0408fe1c7ec70990ae9854dab74deb4eb46b9f3dbe5f4810
