@@ -2,7 +2,7 @@
 
 set -eu
 
-PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PROJECT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 ROUTER_PROVISIONER_SOURCE_ONLY=1
 export ROUTER_PROVISIONER_SOURCE_ONLY
 
@@ -123,6 +123,8 @@ test_input_validation() {
         validate_subscription_url 'file:///etc/shadow'
 }
 
+# White-box test variables are consumed by the sourced runtime.
+# shellcheck disable=SC2034
 test_firmware_plan() {
     BOARD_NAME='glinet,gl-mt6000'
     OPENWRT_TARGET='mediatek/filogic'
@@ -199,6 +201,14 @@ EOF_FETCH
 #!/bin/sh
 exit 0
 EOF_APK
+    cat > "$mock_bin/id" <<'EOF_ID'
+#!/bin/sh
+if [ "${1:-}" = '-u' ]; then
+    printf '0\n'
+    exit 0
+fi
+exec /usr/bin/id "$@"
+EOF_ID
     chmod +x "$mock_bin"/*
 
     output=$(
@@ -225,7 +235,7 @@ test_root_password_detection() {
     assert_false 'locked root password must be rejected' \
         root_has_password
 
-    printf '%s\n' 'root:$6$test$hash:0:0:99999:7:::' \
+    printf '%s\n' "root:\$6\$test\$hash:0:0:99999:7:::" \
         > "$fixture/etc/shadow"
     assert_true 'password hash must be accepted' root_has_password
 
@@ -233,11 +243,15 @@ test_root_password_detection() {
     rm -rf "$fixture"
 }
 
+# White-box test variables are consumed by the sourced runtime.
+# shellcheck disable=SC2034
 test_subscription_redaction() {
     DRY_RUN=1
     ASSUME_YES=1
     TMP_DIR=$(mktemp -d)
 
+    # Mock is invoked indirectly by configure_netshift.
+    # shellcheck disable=SC2317
     uci() {
         if [ "${1:-}" = '-q' ] && [ "${2:-}" = 'get' ] && \
             [ "${3:-}" = 'network.lan.device' ]; then
@@ -265,6 +279,8 @@ test_subscription_redaction() {
     ASSUME_YES=0
 }
 
+# White-box test variables are consumed by the sourced runtime.
+# shellcheck disable=SC2034
 test_extroot_device_guard() {
     fixture=$(mktemp -d)
     mkdir -p "$fixture/proc"
@@ -314,6 +330,8 @@ silent_resource_check() {
     check_resources >/dev/null 2>&1
 }
 
+# White-box test variables are consumed by the sourced runtime.
+# shellcheck disable=SC2034
 test_resource_guard() {
     OVERLAY_FREE_KIB=30000
     RAM_TOTAL_KIB=262144

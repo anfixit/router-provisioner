@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: NetShift upstream
+    url: https://github.com/yandexru45/netshift/issues
+    about: Ошибки самого NetShift, LuCI-интерфейса и его пакетов
+  - name: OpenWrt Forum
+    url: https://forum.openwrt.org/
+    about: Вопросы поддержки конкретного устройства и штатной прошивки OpenWrt
+  - name: Security policy
+    url: https://github.com/anfixit/router-provisioner/security/policy
+    about: Приватное сообщение об уязвимости или утечке секретов
