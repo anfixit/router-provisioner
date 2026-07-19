@@ -1,4 +1,5 @@
 shell=sh
 external-sources=true
 source-path=SCRIPTDIR
-disable=SC1091
+# Intentional literal jq/fixture variables and cross-file white-box calls.
+disable=SC1091,SC2015,SC2016,SC2119,SC2120

@@ -4,7 +4,7 @@
 set -u
 
 PROGRAM_NAME='router-provisioner'
-PROGRAM_VERSION='1.0.2'
+PROGRAM_VERSION='1.1.0'
 MIN_OPENWRT_VERSION='24.10.0'
 MIN_OVERLAY_FREE_KIB=25600
 MIN_RAM_KIB=65536
@@ -15,6 +15,14 @@ FIRMWARE_SELECTOR_URL='https://firmware-selector.openwrt.org'
 NETSHIFT_REPOSITORY='https://github.com/yandexru45/netshift'
 NETSHIFT_INSTALLER_URL='https://raw.githubusercontent.com/'\
 'yandexru45/netshift/refs/heads/main/install.sh'
+YOUTUBE_UNBLOCK_REPOSITORY='https://github.com/Waujito/youtubeUnblock'
+YOUTUBE_UNBLOCK_RELEASE_TAG='v1.3.1'
+YOUTUBE_UNBLOCK_RELEASE_COMMIT='4a223b0'
+YOUTUBE_UNBLOCK_RELEASE_API='https://api.github.com/repos/'\
+'Waujito/youtubeUnblock/releases/tags/v1.3.1'
+YOUTUBE_DIRECT_LIST='/etc/netshift/rulesets/youtube-direct.lst'
+NETSHIFT_FACADE='/usr/lib/netshift/sing_box_config_facade.sh'
+NETSHIFT_REFRESH_HELPER='/usr/bin/router-provisioner-netshift-refresh'
 
 DRY_RUN=0
 DIAGNOSE_ONLY=0
@@ -24,6 +32,7 @@ TMP_DIR=''
 BOARD_JSON=''
 OPENWRT_VERSION=''
 OPENWRT_TARGET=''
+OPENWRT_ARCH=''
 BOARD_NAME=''
 MODEL=''
 PACKAGE_MANAGER='none'
@@ -229,7 +238,11 @@ profile_from_board_name() {
 }
 
 encode_target() {
-    printf '%s' "$1" | sed 's,/,%2F,g'
+    printf '%s' "$1" | sed 's,/,\%2F,g'
+}
+
+strip_cidr() {
+    printf '%s\n' "${1%%/*}"
 }
 
 version_ge() {
@@ -356,6 +369,8 @@ detect_system() {
         2>/dev/null || true)
     OPENWRT_TARGET=$(parse_release_value DISTRIB_TARGET \
         2>/dev/null || true)
+    OPENWRT_ARCH=$(parse_release_value DISTRIB_ARCH \
+        2>/dev/null || true)
     BOARD_NAME=$(json_value '@.board_name' 2>/dev/null || true)
     MODEL=$(json_value '@.model' 2>/dev/null || true)
 
@@ -402,6 +417,8 @@ print_diagnostics() {
         "${OPENWRT_VERSION:-не определён}"
     printf 'Target:                 %s\n' \
         "${OPENWRT_TARGET:-не определён}"
+    printf 'Architecture:           %s\n' \
+        "${OPENWRT_ARCH:-не определена}"
     printf 'Firmware profile:       %s\n' \
         "${profile:-не определён}"
     printf 'Менеджер пакетов:       %s\n' "$PACKAGE_MANAGER"
@@ -753,7 +770,7 @@ print_storage_options() {
 
 create_backup() {
     timestamp=$(date '+%Y%m%d-%H%M%S' 2>/dev/null || printf 'unknown')
-    BACKUP_FILE="/tmp/${PROGRAM_NAME}-${timestamp}.tar.gz"
+    planned_backup="/tmp/${PROGRAM_NAME}-${timestamp}.tar.gz"
 
     print_line
     print_line '=== Резервная копия ==='
@@ -763,20 +780,19 @@ create_backup() {
         return 1
     fi
 
-    if run sysupgrade -b "$BACKUP_FILE"; then
-        info "Резервная копия: $BACKUP_FILE"
-        router_address=$(uci -q get network.lan.ipaddr \
-            2>/dev/null || true)
-        router_address=${router_address:-router}
-        ssh_port=$(uci -q get dropbear.@dropbear[0].Port \
-            2>/dev/null || true)
-        ssh_port=${ssh_port:-22}
-        print_line 'Скопируйте её на компьютер:'
-        printf '  scp -P %s root@%s:%s .\n' \
-            "$ssh_port" "$router_address" "$BACKUP_FILE"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "DRY-RUN: была бы создана копия $planned_backup."
         return 0
     fi
 
+    BACKUP_FILE=$planned_backup
+    if sysupgrade -b "$BACKUP_FILE"; then
+        info "Резервная копия: $BACKUP_FILE"
+        print_line 'Скопируйте резервную копию на компьютер.'
+        return 0
+    fi
+
+    BACKUP_FILE=''
     error 'Не удалось создать резервную копию.'
     return 1
 }
@@ -1178,13 +1194,583 @@ install_netshift() {
     fi
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        info "DRY-RUN: sh $installer"
+        info 'DRY-RUN: установщик NetShift не запускался.'
         return 0
     fi
 
     sh "$installer" || fatal 'Установка NetShift завершилась ошибкой.'
     [ -x /etc/init.d/netshift ] || \
         fatal 'Сервис /etc/init.d/netshift не найден.'
+    [ -x /usr/bin/netshift ] || fatal 'Команда netshift не найдена.'
+}
+
+sing_box_extended_active() {
+    system_info=$(/usr/bin/netshift get_system_info 2>/dev/null || true)
+    printf '%s' "$system_info" | \
+        jq -e '.sing_box_extended == 1' >/dev/null 2>&1
+}
+
+install_sing_box_extended() {
+    print_line
+    print_line '=== Установка sing-box extended ==='
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info 'DRY-RUN: sing-box extended не устанавливался.'
+        return 0
+    fi
+
+    command_exists jq || fatal 'Для проверки sing-box extended нужен jq.'
+    [ -x /usr/bin/netshift ] || fatal 'Команда netshift не найдена.'
+
+    if sing_box_extended_active; then
+        info 'sing-box extended уже активен.'
+        return 0
+    fi
+
+    if ! /usr/bin/netshift component_action \
+        sing_box install_extended; then
+        fatal 'NetShift не смог установить sing-box extended.'
+    fi
+
+    if ! sing_box_extended_active; then
+        fatal 'sing-box extended не активировался.'
+    fi
+
+    info 'sing-box extended установлен и проверен.'
+}
+
+patch_netshift_xhttp_policy() {
+    facade=${1:-$NETSHIFT_FACADE}
+
+    [ -r "$facade" ] || {
+        error "Файл NetShift не найден: $facade"
+        return 1
+    }
+
+    if grep -F \
+        'select($ob.type == "vless" and' \
+        "$facade" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    temporary="${facade}.router-provisioner.$$"
+    backup="${facade}.before-router-provisioner"
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "DRY-RUN: в $facade была бы включена XHTTP-only политика."
+        return 0
+    fi
+
+    [ -e "$backup" ] || cp -p "$facade" "$backup" || return 1
+
+    if ! awk '
+        {
+            print
+            if (index($0, "| [ $candidates[]") > 0) {
+                in_candidates = 1
+                next
+            }
+            if (in_candidates &&
+                index($0, "| . as $ob") > 0) {
+                print "            | select($ob.type == \"vless\" and"
+                print "                     (($ob.transport.type // \"\") == \"xhttp\"))"
+                inserted = inserted + 1
+                in_candidates = 0
+            }
+        }
+        END {
+            if (inserted != 1) {
+                exit 42
+            }
+        }
+    ' "$facade" > "$temporary"; then
+        rm -f "$temporary"
+        error 'Структура NetShift изменилась: XHTTP-only патч не применён.'
+        return 1
+    fi
+
+    chmod 644 "$temporary"
+    if ! mv "$temporary" "$facade"; then
+        rm -f "$temporary"
+        return 1
+    fi
+
+    grep -F \
+        'select($ob.type == "vless" and' \
+        "$facade" >/dev/null 2>&1
+}
+
+validate_xhttp_config() {
+    config_file=${1:-/etc/sing-box/config.json}
+
+    [ -s "$config_file" ] || return 1
+    jq -e '
+        [.outbounds[]?
+            | select(
+                .type == "vless" and
+                (.transport.type // "") == "xhttp"
+            )
+            | .tag
+        ] as $xhttp_tags
+        | [.outbounds[]?
+            | select(.type == "urltest")
+            | .tag
+        ] as $urltest_tags
+        | ($xhttp_tags | length) > 0
+        and all(
+            .outbounds[]?;
+            if .type == "vless" then
+                (.transport.type // "") == "xhttp"
+            elif .type == "urltest" then
+                all(.outbounds[]?; . as $tag |
+                    ($xhttp_tags | index($tag)) != null)
+            elif .type == "selector" then
+                all(.outbounds[]?; . as $tag |
+                    (($xhttp_tags | index($tag)) != null) or
+                    (($urltest_tags | index($tag)) != null))
+            else
+                true
+            end
+        )
+    ' "$config_file" >/dev/null 2>&1
+}
+
+install_xhttp_refresh_helper() {
+    print_line
+    print_line '=== Защита XHTTP-only ==='
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "DRY-RUN: был бы создан $NETSHIFT_REFRESH_HELPER."
+        return 0
+    fi
+
+    cat > "$NETSHIFT_REFRESH_HELPER" <<'EOF_XHTTP_REFRESH'
+#!/bin/ash
+
+set -u
+
+FACADE='/usr/lib/netshift/sing_box_config_facade.sh'
+CONFIG='/etc/sing-box/config.json'
+
+log() {
+    logger -t router-provisioner-xhttp "$*"
+}
+
+patch_policy() {
+    if grep -F \
+        'select($ob.type == "vless" and' \
+        "$FACADE" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    temporary="${FACADE}.router-provisioner.$$"
+    if ! awk '
+        {
+            print
+            if (index($0, "| [ $candidates[]") > 0) {
+                in_candidates = 1
+                next
+            }
+            if (in_candidates &&
+                index($0, "| . as $ob") > 0) {
+                print "            | select($ob.type == \"vless\" and"
+                print "                     (($ob.transport.type // \"\") == \"xhttp\"))"
+                inserted = inserted + 1
+                in_candidates = 0
+            }
+        }
+        END {
+            if (inserted != 1) {
+                exit 42
+            }
+        }
+    ' "$FACADE" > "$temporary"; then
+        rm -f "$temporary"
+        log 'XHTTP-only policy could not be applied'
+        return 1
+    fi
+
+    chmod 644 "$temporary"
+    mv "$temporary" "$FACADE"
+}
+
+validate_config() {
+    jq -e '
+        [.outbounds[]?
+            | select(
+                .type == "vless" and
+                (.transport.type // "") == "xhttp"
+            )
+            | .tag
+        ] as $xhttp_tags
+        | [.outbounds[]?
+            | select(.type == "urltest")
+            | .tag
+        ] as $urltest_tags
+        | ($xhttp_tags | length) > 0
+        and all(
+            .outbounds[]?;
+            if .type == "vless" then
+                (.transport.type // "") == "xhttp"
+            elif .type == "urltest" then
+                all(.outbounds[]?; . as $tag |
+                    ($xhttp_tags | index($tag)) != null)
+            elif .type == "selector" then
+                all(.outbounds[]?; . as $tag |
+                    (($xhttp_tags | index($tag)) != null) or
+                    (($urltest_tags | index($tag)) != null))
+            else
+                true
+            end
+        )
+    ' "$CONFIG" >/dev/null 2>&1
+}
+
+patch_policy || exit 1
+/usr/bin/netshift subscription_update || exit 1
+sleep 2
+
+if ! validate_config; then
+    log 'Unsafe subscription rejected: non-XHTTP or no XHTTP nodes'
+    /etc/init.d/netshift stop >/dev/null 2>&1 || true
+    exit 1
+fi
+
+log 'Subscription updated: XHTTP-only validation passed'
+EOF_XHTTP_REFRESH
+
+    chmod 700 "$NETSHIFT_REFRESH_HELPER"
+    patch_netshift_xhttp_policy || \
+        fatal 'Не удалось включить XHTTP-only политику.'
+}
+
+prepare_root_crontab() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info 'DRY-RUN: root crontab был бы подготовлен.'
+        return 0
+    fi
+
+    mkdir -p /etc/crontabs
+    touch /etc/crontabs/root
+    chmod 600 /etc/crontabs/root
+}
+
+configure_netshift_cron() {
+    cron_file='/etc/crontabs/root'
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info 'DRY-RUN: cron NetShift не изменялся.'
+        return 0
+    fi
+
+    prepare_root_crontab
+    temporary="${cron_file}.router-provisioner.$$"
+    grep -v '/usr/bin/netshift list_update' "$cron_file" | \
+        grep -v '/usr/bin/netshift subscription_update' | \
+        grep -v "$NETSHIFT_REFRESH_HELPER" > "$temporary" || true
+
+    {
+        cat "$temporary"
+        print_line '13 9 * * * /usr/bin/netshift list_update'
+        printf '17 * * * * %s\n' "$NETSHIFT_REFRESH_HELPER"
+    } > "$cron_file"
+    rm -f "$temporary"
+    chmod 600 "$cron_file"
+
+    /etc/init.d/cron restart >/dev/null 2>&1 || \
+        warn 'Не удалось перезапустить cron.'
+}
+
+write_youtube_direct_list() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "DRY-RUN: был бы создан $YOUTUBE_DIRECT_LIST."
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$YOUTUBE_DIRECT_LIST")"
+    cat > "$YOUTUBE_DIRECT_LIST" <<'EOF_YOUTUBE_DOMAINS'
+youtube.com
+ytimg.com
+yting.com
+ggpht.com
+googlevideo.com
+youtubekids.com
+youtu.be
+yt.be
+youtube-nocookie.com
+wide-youtube.l.google.com
+ytimg.l.google.com
+youtubei.googleapis.com
+youtubeembeddedplayer.googleapis.com
+youtube-ui.l.google.com
+yt-video-upload.l.google.com
+jnn-pa.googleapis.com
+returnyoutubedislikeapi.com
+yt3.googleusercontent.com
+EOF_YOUTUBE_DOMAINS
+    chmod 644 "$YOUTUBE_DIRECT_LIST"
+}
+
+openwrt_release_series() {
+    printf '%s\n' "$OPENWRT_VERSION" | \
+        awk -F. '{print $1 "." $2}'
+}
+
+youtube_unblock_asset_name() {
+    component=$1
+    package_extension=$2
+    release_version=${YOUTUBE_UNBLOCK_RELEASE_TAG#v}
+
+    case "$component" in
+        core)
+            series=$(openwrt_release_series)
+            printf 'youtubeUnblock-%s-1-%s-%s-openwrt-%s.%s\n' \
+                "$release_version" \
+                "$YOUTUBE_UNBLOCK_RELEASE_COMMIT" \
+                "$OPENWRT_ARCH" \
+                "$series" \
+                "$package_extension"
+            ;;
+        luci)
+            printf 'luci-app-youtubeUnblock-%s-1-%s.%s\n' \
+                "$release_version" \
+                "$YOUTUBE_UNBLOCK_RELEASE_COMMIT" \
+                "$package_extension"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+youtube_unblock_known_sha256() {
+    case "$1" in
+        youtubeUnblock-1.3.1-1-4a223b0-aarch64_cortex-a53-openwrt-25.12.apk)
+            print_line \
+                '15372a5cce3781b48b2d2b0668287686fecca3e203dfe8eb4ca5cfa3a1a17a1c'
+            ;;
+        luci-app-youtubeUnblock-1.3.1-1-4a223b0.apk)
+            print_line \
+                '8815ea38bf45bad011f65f43f5a3afeeccf0df4f34c7eaad839663454598a9a7'
+            ;;
+        youtubeUnblock-1.3.1-1-4a223b0-aarch64_cortex-a53-openwrt-24.10.ipk)
+            print_line \
+                'a364d193e54792f94dd1c1cdcae63747e10a1723ef50c3981155f1911bb3e1a3'
+            ;;
+        luci-app-youtubeUnblock-1.3.1-1-4a223b0.ipk)
+            print_line \
+                '53f770f4197f755fff8bee9b45f040d04418cdb62480d901c2af170f95eb0299'
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+download_youtube_unblock_asset() {
+    release_json=$1
+    asset_name=$2
+    destination=$3
+
+    asset_url=$(jq -r --arg name "$asset_name" '
+        .assets[]?
+        | select(.name == $name)
+        | .browser_download_url
+    ' "$release_json" | head -n 1)
+    [ -n "$asset_url" ] && [ "$asset_url" != 'null' ] || {
+        error "В релизе не найден пакет: $asset_name"
+        return 1
+    }
+
+    expected_hash=$(jq -r --arg name "$asset_name" '
+        .assets[]?
+        | select(.name == $name)
+        | (.digest // "")
+    ' "$release_json" | head -n 1 | sed 's/^sha256://')
+    if [ -z "$expected_hash" ]; then
+        expected_hash=$(youtube_unblock_known_sha256 \
+            "$asset_name" 2>/dev/null || true)
+    fi
+    [ -n "$expected_hash" ] || {
+        error "Для $asset_name нет SHA-256."
+        return 1
+    }
+
+    fetch_to_file "$asset_url" "$destination" || return 1
+    actual_hash=$(sha256sum "$destination" | awk '{print $1}')
+    [ "$actual_hash" = "$expected_hash" ] || {
+        error "SHA-256 не совпал для $asset_name."
+        return 1
+    }
+}
+
+configure_youtube_unblock() {
+    must_run uci set \
+        'youtubeUnblock.youtubeUnblock=youtubeUnblock'
+    must_run uci set \
+        'youtubeUnblock.youtubeUnblock.conf_strat=ui_flags'
+    must_run uci set \
+        'youtubeUnblock.youtubeUnblock.packet_mark=32768'
+    must_run uci set \
+        'youtubeUnblock.youtubeUnblock.queue_num=537'
+
+    must_run uci set 'youtubeUnblock.default=section'
+    must_run uci set 'youtubeUnblock.default.name=Default section'
+    must_run uci set 'youtubeUnblock.default.enabled=1'
+    must_run uci set 'youtubeUnblock.default.tls_enabled=1'
+    must_run uci set 'youtubeUnblock.default.fake_sni=0'
+    must_run uci set \
+        'youtubeUnblock.default.faking_strategy=pastseq'
+    must_run uci set \
+        'youtubeUnblock.default.fake_sni_seq_len=1'
+    must_run uci set \
+        'youtubeUnblock.default.fake_sni_type=default'
+    must_run uci set 'youtubeUnblock.default.frag=tcp'
+    must_run uci set \
+        'youtubeUnblock.default.frag_sni_reverse=1'
+    must_run uci set \
+        'youtubeUnblock.default.frag_sni_faked=0'
+    must_run uci set \
+        'youtubeUnblock.default.frag_middle_sni=1'
+    must_run uci set \
+        'youtubeUnblock.default.frag_sni_pos=1'
+    must_run uci set 'youtubeUnblock.default.seg2delay=0'
+    must_run uci set 'youtubeUnblock.default.fk_winsize=0'
+    must_run uci set 'youtubeUnblock.default.synfake=0'
+    must_run uci set \
+        'youtubeUnblock.default.sni_detection=parse'
+    must_run uci set 'youtubeUnblock.default.all_domains=0'
+    must_run uci set 'youtubeUnblock.default.quic_drop=0'
+    must_run uci set 'youtubeUnblock.default.udp_mode=drop'
+    must_run uci set \
+        'youtubeUnblock.default.udp_fake_seq_len=6'
+    must_run uci set 'youtubeUnblock.default.udp_fake_len=64'
+    must_run uci set \
+        'youtubeUnblock.default.udp_filter_quic=parse'
+    must_run uci set \
+        'youtubeUnblock.default.udp_faking_strategy=none'
+
+    run uci -q delete 'youtubeUnblock.default.sni_domains'
+    for domain in \
+        googlevideo.com \
+        ggpht.com \
+        ytimg.com \
+        youtube.com \
+        play.google.com \
+        youtu.be \
+        googleapis.com \
+        googleusercontent.com \
+        gstatic.com \
+        l.google.com; do
+        must_run uci add_list \
+            "youtubeUnblock.default.sni_domains=$domain"
+    done
+
+    must_run uci commit youtubeUnblock
+}
+
+install_youtube_unblock() {
+    print_line
+    print_line '=== Установка youtubeUnblock ==='
+    printf 'Источник: %s\n' "$YOUTUBE_UNBLOCK_REPOSITORY"
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info 'DRY-RUN: youtubeUnblock не устанавливался.'
+        configure_youtube_unblock
+        return 0
+    fi
+
+    command_exists jq || fatal 'Для установки youtubeUnblock нужен jq.'
+    command_exists sha256sum || \
+        fatal 'Для проверки youtubeUnblock нужен sha256sum.'
+
+    if [ -z "$OPENWRT_ARCH" ]; then
+        case "$PACKAGE_MANAGER" in
+            apk)
+                OPENWRT_ARCH=$(apk --print-arch 2>/dev/null || true)
+                ;;
+            opkg)
+                OPENWRT_ARCH=$(opkg print-architecture 2>/dev/null | \
+                    awk 'END {print $2}')
+                ;;
+        esac
+    fi
+    [ -n "$OPENWRT_ARCH" ] || \
+        fatal 'Архитектура OpenWrt не определена.'
+
+    case "$PACKAGE_MANAGER" in
+        apk)
+            package_extension='apk'
+            must_run apk update
+            must_run apk add kmod-nft-queue kmod-nf-conntrack
+            ;;
+        opkg)
+            package_extension='ipk'
+            must_run opkg update
+            must_run opkg install kmod-nft-queue kmod-nf-conntrack
+            ;;
+        *)
+            fatal 'Для youtubeUnblock нужен apk или opkg.'
+            ;;
+    esac
+
+    release_json="$TMP_DIR/youtubeUnblock-release.json"
+    fetch_to_file "$YOUTUBE_UNBLOCK_RELEASE_API" "$release_json" || \
+        fatal 'Метаданные релиза youtubeUnblock не скачаны.'
+
+    core_asset=$(youtube_unblock_asset_name core "$package_extension") || \
+        fatal 'Имя пакета youtubeUnblock не построено.'
+    luci_asset=$(youtube_unblock_asset_name luci "$package_extension") || \
+        fatal 'Имя пакета LuCI youtubeUnblock не построено.'
+    core_package="$TMP_DIR/$core_asset"
+    luci_package="$TMP_DIR/$luci_asset"
+
+    download_youtube_unblock_asset \
+        "$release_json" "$core_asset" "$core_package" || \
+        fatal 'Пакет youtubeUnblock не прошёл проверку.'
+    download_youtube_unblock_asset \
+        "$release_json" "$luci_asset" "$luci_package" || \
+        fatal 'LuCI-пакет youtubeUnblock не прошёл проверку.'
+
+    case "$PACKAGE_MANAGER" in
+        apk)
+            apk add --allow-untrusted \
+                "$core_package" "$luci_package" || \
+                fatal 'APK-пакеты youtubeUnblock не установлены.'
+            ;;
+        opkg)
+            opkg install "$core_package" "$luci_package" || \
+                fatal 'IPK-пакеты youtubeUnblock не установлены.'
+            ;;
+    esac
+
+    [ -x /etc/init.d/youtubeUnblock ] || \
+        fatal 'Сервис youtubeUnblock не найден.'
+    configure_youtube_unblock
+
+    /etc/init.d/youtubeUnblock enable || \
+        fatal 'Автозапуск youtubeUnblock не включён.'
+    /etc/init.d/firewall reload || \
+        fatal 'Firewall не применил правило youtubeUnblock.'
+    /etc/init.d/youtubeUnblock restart || \
+        fatal 'youtubeUnblock не запустился.'
+}
+
+validate_youtube_unblock() {
+    print_line
+    print_line '=== Проверка youtubeUnblock ==='
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info 'DRY-RUN: проверка youtubeUnblock пропущена.'
+        return 0
+    fi
+
+    pgrep -f '[y]outubeUnblock' >/dev/null 2>&1 || \
+        fatal 'Процесс youtubeUnblock не запущен.'
+    nft list chain inet fw4 youtubeUnblock >/dev/null 2>&1 || \
+        fatal 'NFT-цепочка youtubeUnblock не создана.'
+
+    info 'youtubeUnblock запущен, NFT-цепочка активна.'
 }
 
 backup_netshift_config() {
@@ -1215,8 +1801,7 @@ configure_netshift() {
     print_line '=== Настройка NetShift ==='
 
     if ! ask_yes_no 'Добавить ссылку подписки сейчас?' 'yes'; then
-        print_netshift_luci_instructions
-        return 0
+        fatal 'Для XHTTP-only настройки нужна ссылка подписки.'
     fi
 
     subscription_url=$(ask_secret 'Ссылка подписки VPN')
@@ -1231,6 +1816,9 @@ configure_netshift() {
     source_interface=${source_interface:-br-lan}
 
     backup_netshift_config
+    write_youtube_direct_list
+    prepare_root_crontab
+    install_xhttp_refresh_helper
 
     must_run uci set 'netshift.settings=settings'
     must_run uci set 'netshift.settings.dns_type=doh'
@@ -1247,51 +1835,61 @@ configure_netshift() {
     must_run uci set 'netshift.settings.dns_via_outbound=0'
     must_run uci set 'netshift.settings.disable_quic=0'
 
-    if ask_yes_no 'Весь внешний трафик через VPN?' 'yes'; then
-        must_run uci set 'netshift.settings.global_proxy=1'
-    else
-        must_run uci set 'netshift.settings.global_proxy=0'
-    fi
+    run uci -q delete 'netshift.main'
+    run uci -q delete 'netshift.ru_direct'
 
-    must_run uci set 'netshift.main=section'
-    must_run uci set 'netshift.main.connection_type=proxy'
-    must_run uci set 'netshift.main.proxy_config_type=subscription'
-    run uci -q delete 'netshift.main.subscription_url'
+    must_run uci set 'netshift.VPN=section'
+    must_run uci set 'netshift.VPN.connection_type=proxy'
+    must_run uci set \
+        'netshift.VPN.proxy_config_type=subscription'
+    run uci -q delete 'netshift.VPN.subscription_url'
     run_redacted \
-        'uci add_list netshift.main.subscription_url=[REDACTED]' \
+        'uci add_list netshift.VPN.subscription_url=[REDACTED]' \
         uci add_list \
-        "netshift.main.subscription_url=$subscription_url" || {
+        "netshift.VPN.subscription_url=$subscription_url" || {
             restore_netshift_config
             fatal 'Не удалось сохранить подписку.'
         }
     must_run uci set \
-        'netshift.main.subscription_format_preference=xray'
+        'netshift.VPN.subscription_format_preference=xray'
     must_run uci set \
-        'netshift.main.subscription_allow_insecure=0'
+        'netshift.VPN.subscription_allow_insecure=0'
     must_run uci set \
-        'netshift.main.subscription_update_interval=1h'
-    must_run uci set 'netshift.main.subscription_group_mode=off'
-    must_run uci set 'netshift.main.urltest_check_interval=3m'
-    must_run uci set 'netshift.main.urltest_tolerance=50'
+        'netshift.VPN.subscription_update_interval=disabled'
     must_run uci set \
-        'netshift.main.urltest_testing_url=https://www.gstatic.com/generate_204'
+        'netshift.VPN.subscription_group_mode=off'
+    must_run uci set \
+        'netshift.VPN.urltest_check_interval=3m'
+    must_run uci set 'netshift.VPN.urltest_tolerance=50'
+    must_run uci set \
+        'netshift.VPN.urltest_testing_url=https://www.gstatic.com/generate_204'
+    must_run uci set 'netshift.VPN.enable_udp_over_tcp=0'
+    must_run uci set 'netshift.VPN.global_proxy=1'
+    must_run uci set \
+        'netshift.VPN.user_domain_list_type=disabled'
+    must_run uci set \
+        'netshift.VPN.user_subnet_list_type=disabled'
+    must_run uci set 'netshift.VPN.mixed_proxy_enabled=0'
+    must_run uci set \
+        'netshift.VPN.resolve_real_ip_for_routing=0'
 
-    if ask_yes_no 'Российские сервисы, .ru и .su напрямую?' 'yes'; then
-        user_domains=$(printf '.ru\n.su')
-        must_run uci set 'netshift.ru_direct=section'
-        must_run uci set 'netshift.ru_direct.connection_type=exclusion'
-        run uci -q delete 'netshift.ru_direct.community_lists'
-        must_run uci add_list \
-            'netshift.ru_direct.community_lists=russia_outside'
-        must_run uci set \
-            'netshift.ru_direct.user_domain_list_type=text'
-        must_run uci set \
-            "netshift.ru_direct.user_domains_text=$user_domains"
-        must_run uci set \
-            'netshift.ru_direct.user_subnet_list_type=disabled'
-    else
-        run uci -q delete 'netshift.ru_direct'
-    fi
+    must_run uci set 'netshift.RU_DIRECT=section'
+    must_run uci set \
+        'netshift.RU_DIRECT.connection_type=exclusion'
+    must_run uci set 'netshift.RU_DIRECT.global_proxy=0'
+    run uci -q delete 'netshift.RU_DIRECT.community_lists'
+    must_run uci add_list \
+        'netshift.RU_DIRECT.community_lists=russia_outside'
+    must_run uci set \
+        'netshift.RU_DIRECT.user_domain_list_type=text'
+    must_run uci set \
+        "netshift.RU_DIRECT.user_domains_text=.ru
+.su"
+    must_run uci set \
+        'netshift.RU_DIRECT.user_subnet_list_type=disabled'
+    run uci -q delete 'netshift.RU_DIRECT.local_domain_lists'
+    must_run uci add_list \
+        "netshift.RU_DIRECT.local_domain_lists=$YOUTUBE_DIRECT_LIST"
 
     if ! run uci commit netshift; then
         restore_netshift_config
@@ -1315,22 +1913,11 @@ configure_netshift() {
     fi
 
     sleep 2
-    /usr/bin/netshift list_update || warn 'Списки не обновились.'
-    /usr/bin/netshift subscription_update || \
-        warn 'Подписка не обновилась.'
-}
-
-print_netshift_luci_instructions() {
-    print_line
-    print_line 'Настройка подписки через LuCI:'
-    print_line '1. Откройте Services -> NetShift.'
-    print_line '2. Создайте секцию типа Proxy.'
-    print_line '3. Выберите Subscription URL.'
-    print_line '4. Вставьте ссылку подписки.'
-    print_line '5. Для Remnawave/XHTTP выберите формат Xray.'
-    print_line '6. Интервал проверки URLTest: 3m.'
-    print_line '7. Интервал обновления подписки: 1h.'
-    print_line '8. Сохраните и примените настройки.'
+    /usr/bin/netshift list_update || \
+        fatal 'Списки NetShift не обновились.'
+    "$NETSHIFT_REFRESH_HELPER" || \
+        fatal 'Подписка не прошла XHTTP-only проверку.'
+    configure_netshift_cron
 }
 
 validate_netshift() {
@@ -1338,27 +1925,18 @@ validate_netshift() {
     print_line '=== Проверка NetShift ==='
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        info 'DRY-RUN: проверка сервиса пропущена.'
+        info 'DRY-RUN: проверка NetShift пропущена.'
         return 0
     fi
 
-    if /etc/init.d/netshift status >/dev/null 2>&1; then
-        info 'Сервис NetShift запущен.'
-    else
-        warn 'NetShift не сообщил состояние running.'
-    fi
+    sing_box_extended_active || \
+        fatal 'Активен не sing-box extended.'
+    pgrep -f '[s]ing-box' >/dev/null 2>&1 || \
+        fatal 'Процесс sing-box не запущен.'
+    validate_xhttp_config /etc/sing-box/config.json || \
+        fatal 'Конфигурация содержит TCP-ноды или не содержит XHTTP.'
 
-    if command_exists logread; then
-        print_line 'Последние сообщения NetShift:'
-        logread -e netshift | tail -n 30 || true
-    fi
-
-    print_line
-    print_line 'Для подписок с VLESS XHTTP:'
-    print_line '1. LuCI -> Services -> NetShift.'
-    print_line '2. Откройте Component Manager.'
-    print_line '3. Нажмите Install extended для sing-box.'
-    print_line '4. Обновите подписку и перезапустите NetShift.'
+    info 'NetShift работает только с VLESS XHTTP-нодами.'
 }
 
 apply_services() {
@@ -1377,25 +1955,31 @@ apply_services() {
 }
 
 print_final_instructions() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        print_line
+        print_line '=== DRY-RUN завершён ==='
+        print_line 'Настройки не применялись.'
+        print_line 'NetShift, sing-box extended и youtubeUnblock не устанавливались.'
+        return 0
+    fi
+
     hostname_value=$(uci -q get system.@system[0].hostname \
         2>/dev/null || true)
     hostname_value=${hostname_value:-OpenWrt}
     lan_ip=$(uci -q get network.lan.ipaddr 2>/dev/null || true)
     lan_ip=${lan_ip:-192.168.1.1}
-    ssh_port=$(uci -q get dropbear.@dropbear[0].Port \
-        2>/dev/null || true)
-    ssh_port=${ssh_port:-22}
+    lan_ip=$(strip_cidr "$lan_ip")
 
     print_line
     print_line '=== Готово ==='
     printf 'LuCI: http://%s/\n' "$lan_ip"
-    printf 'SSH:  ssh -p %s root@%s\n' "$ssh_port" "$lan_ip"
     printf 'Hostname: %s\n' "$hostname_value"
     if [ -n "$BACKUP_FILE" ]; then
         printf 'Backup: %s\n' "$BACKUP_FILE"
     fi
-    print_line 'Проверьте локальную сеть и прямой доступ к сервисам РФ.'
-    print_line 'Проверьте внешний IP, DNS и переключение VPN-узлов.'
+    print_line 'NetShift: только VLESS XHTTP, TCP-ноды запрещены.'
+    print_line 'YouTube: прямой маршрут через youtubeUnblock.'
+    print_line 'Российские сервисы и локальная сеть: напрямую.'
     print_line
     warn 'Dropbear ещё работает со старыми активными настройками.'
     print_line 'Не закрывая текущий SSH-сеанс, выполните:'
@@ -1500,8 +2084,11 @@ main() {
     configure_ssh
     configure_wifi
     install_netshift
+    install_sing_box_extended
+    install_youtube_unblock
     configure_netshift
     validate_netshift
+    validate_youtube_unblock
     apply_services
     print_final_instructions
 }

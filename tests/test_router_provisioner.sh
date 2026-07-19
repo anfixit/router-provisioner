@@ -78,6 +78,12 @@ test_target_encoding() {
         'target slash must be URL encoded'
 }
 
+test_cidr_stripping() {
+    result=$(strip_cidr '192.168.1.1/24')
+    assert_equal '192.168.1.1' "$result" \
+        'CIDR suffix must not appear in user-facing addresses'
+}
+
 test_version_comparison() {
     assert_true '25.12.5 must be newer than 24.10.0' \
         version_ge '25.12.5' '24.10.0'
@@ -160,7 +166,7 @@ test_wifi_password_retry() {
     )
 
     assert_equal "$expected" "$result" \
-        'Wi-Fi password must retry until length and confirmation pass'
+        'Wi-Fi password must retry until confirmation passes'
 }
 
 test_wifi_encryption_retry() {
@@ -297,7 +303,7 @@ test_root_password_detection() {
     assert_false 'locked root password must be rejected' \
         root_has_password
 
-    printf '%s\n' "root:\$6\$test\$hash:0:0:99999:7:::" \
+    printf '%s\n' 'root:$6$test$hash:0:0:99999:7:::' \
         > "$fixture/etc/shadow"
     assert_true 'password hash must be accepted' root_has_password
 
@@ -411,20 +417,163 @@ test_resource_guard() {
         silent_resource_check
 }
 
+test_xhttp_policy_patch() {
+    fixture=$(mktemp -d)
+    facade="$fixture/sing_box_config_facade.sh"
+    cat > "$facade" <<'EOF_FACADE'
+prepare() {
+    jq '
+        | [ $candidates[]
+            | . as $ob
+            | (($ob.remark // $ob.tag // "") | tostring) as $name
+          ] as $kept
+    '
+}
+EOF_FACADE
+
+    patch_netshift_xhttp_policy "$facade"
+    patch_netshift_xhttp_policy "$facade"
+    count=$(grep -Fc 'select($ob.type == "vless" and' "$facade")
+
+    assert_equal '1' "$count" \
+        'XHTTP-only patch must be inserted exactly once'
+    rm -rf "$fixture"
+}
+
+test_xhttp_config_validation() {
+    fixture=$(mktemp -d)
+    safe="$fixture/safe.json"
+    unsafe="$fixture/unsafe.json"
+
+    cat > "$safe" <<'EOF_SAFE'
+{
+  "outbounds": [
+    {"type":"vless","tag":"x1","transport":{"type":"xhttp"}},
+    {"type":"urltest","tag":"test","outbounds":["x1"]},
+    {"type":"selector","tag":"proxy","outbounds":["x1","test"]}
+  ]
+}
+EOF_SAFE
+    cat > "$unsafe" <<'EOF_UNSAFE'
+{
+  "outbounds": [
+    {"type":"vless","tag":"x1","transport":{"type":"xhttp"}},
+    {"type":"vless","tag":"tcp1","flow":"xtls-rprx-vision"},
+    {"type":"urltest","tag":"test","outbounds":["x1","tcp1"]}
+  ]
+}
+EOF_UNSAFE
+
+    assert_true 'XHTTP-only config must pass' \
+        validate_xhttp_config "$safe"
+    assert_false 'TCP node must fail XHTTP-only validation' \
+        validate_xhttp_config "$unsafe"
+    rm -rf "$fixture"
+}
+
+test_youtube_direct_list() {
+    fixture=$(mktemp -d)
+    original_list=$YOUTUBE_DIRECT_LIST
+    YOUTUBE_DIRECT_LIST="$fixture/youtube-direct.lst"
+
+    write_youtube_direct_list
+
+    assert_true 'YouTube direct list must be created' \
+        test -s "$YOUTUBE_DIRECT_LIST"
+    output=$(cat "$YOUTUBE_DIRECT_LIST")
+    assert_contains "$output" 'googlevideo.com' \
+        'googlevideo.com is missing from direct list'
+    assert_contains "$output" 'youtubei.googleapis.com' \
+        'YouTube API domain is missing from direct list'
+    assert_contains "$output" 'yt3.googleusercontent.com' \
+        'YouTube content domain is missing from direct list'
+
+    YOUTUBE_DIRECT_LIST=$original_list
+    rm -rf "$fixture"
+}
+
+test_youtube_asset_names() {
+    OPENWRT_VERSION='25.12.5'
+    OPENWRT_ARCH='aarch64_cortex-a53'
+
+    core=$(youtube_unblock_asset_name core apk)
+    luci=$(youtube_unblock_asset_name luci apk)
+
+    assert_equal \
+        'youtubeUnblock-1.3.1-1-4a223b0-aarch64_cortex-a53-openwrt-25.12.apk' \
+        "$core" \
+        'youtubeUnblock package name is incorrect'
+    assert_equal \
+        'luci-app-youtubeUnblock-1.3.1-1-4a223b0.apk' \
+        "$luci" \
+        'youtubeUnblock LuCI package name is incorrect'
+}
+
 test_current_netshift_schema() {
     script=$(cat "$PROJECT_DIR/router-provisioner.sh")
 
     assert_contains "$script" \
-        'netshift.settings.global_proxy' \
-        'global proxy must use the settings section'
+        'netshift.VPN.global_proxy=1' \
+        'global proxy must be enabled on the VPN section'
+    assert_not_contains "$script" \
+        'netshift.settings.global_proxy=' \
+        'global proxy must not be stored in settings'
     assert_contains "$script" \
         'subscription_allow_insecure' \
         'current allow-insecure option is missing'
     assert_not_contains "$script" \
         'subscription_insecure=' \
         'deprecated subscription option is present'
-    assert_not_contains "$script" '/etc/crontabs/root' \
-        'NetShift schedules must not be duplicated in cron'
+    assert_contains "$script" \
+        'subscription_update_interval=disabled' \
+        'unsafe native subscription cron must be disabled'
+    assert_contains "$script" \
+        'router-provisioner-netshift-refresh' \
+        'guarded subscription updater is missing'
+    assert_contains "$script" \
+        'select($ob.type == "vless" and' \
+        'actual transport-based XHTTP filter is missing'
+    assert_contains "$script" \
+        'local_domain_lists=$YOUTUBE_DIRECT_LIST' \
+        'local YouTube direct list is not connected'
+}
+
+test_youtube_unblock_configuration() {
+    script=$(cat "$PROJECT_DIR/router-provisioner.sh")
+
+    assert_contains "$script" \
+        'youtubeUnblock.default.faking_strategy=pastseq' \
+        'working youtubeUnblock strategy is missing'
+    assert_contains "$script" \
+        'youtubeUnblock.default.udp_mode=drop' \
+        'working youtubeUnblock UDP mode is missing'
+    assert_contains "$script" \
+        'youtubeUnblock.default.sni_detection=parse' \
+        'working youtubeUnblock SNI mode is missing'
+    assert_contains "$script" \
+        'kmod-nft-queue kmod-nf-conntrack' \
+        'youtubeUnblock kernel dependencies are missing'
+}
+
+test_dry_run_final_output() {
+    DRY_RUN=1
+    BACKUP_FILE='/tmp/fake-backup.tar.gz'
+
+    output=$(print_final_instructions 2>&1)
+
+    assert_contains "$output" 'DRY-RUN завершён' \
+        'dry-run final heading is missing'
+    assert_contains "$output" 'не устанавливались' \
+        'dry-run must state that packages were not installed'
+    assert_not_contains "$output" '=== Готово ===' \
+        'dry-run must not claim completion'
+    assert_not_contains "$output" 'dropbear restart' \
+        'dry-run must not request a service restart'
+    assert_not_contains "$output" 'Backup:' \
+        'dry-run must not show a nonexistent backup'
+
+    DRY_RUN=0
+    BACKUP_FILE=''
 }
 
 test_ssh_session_safety() {
@@ -470,6 +619,7 @@ test_repository_is_minimal() {
 main() {
     test_profile_conversion
     test_target_encoding
+    test_cidr_stripping
     test_version_comparison
     test_release_parser
     test_input_validation
@@ -485,7 +635,13 @@ main() {
     test_extroot_device_guard
     test_installer_validation
     test_resource_guard
+    test_xhttp_policy_patch
+    test_xhttp_config_validation
+    test_youtube_direct_list
+    test_youtube_asset_names
     test_current_netshift_schema
+    test_youtube_unblock_configuration
+    test_dry_run_final_output
     test_ssh_session_safety
     test_repository_is_minimal
 
