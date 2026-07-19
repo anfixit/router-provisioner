@@ -6,7 +6,7 @@ PROJECT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 ROUTER_PROVISIONER_SOURCE_ONLY=1
 export ROUTER_PROVISIONER_SOURCE_ONLY
 
-# shellcheck source=../router-provisioner.sh
+# shellcheck source=router-provisioner.sh
 . "$PROJECT_DIR/router-provisioner.sh"
 
 TEST_COUNT=0
