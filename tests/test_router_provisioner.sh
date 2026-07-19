@@ -6,15 +6,6 @@ PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ROUTER_PROVISIONER_SOURCE_ONLY=1
 export ROUTER_PROVISIONER_SOURCE_ONLY
 
-# Tests must not depend on the host user's privileges.
-id() {
-    if [ "${1:-}" = '-u' ]; then
-        printf '0\n'
-        return 0
-    fi
-    command id "$@"
-}
-
 # shellcheck source=../router-provisioner.sh
 . "$PROJECT_DIR/router-provisioner.sh"
 
@@ -208,6 +199,14 @@ EOF_FETCH
 #!/bin/sh
 exit 0
 EOF_APK
+    cat > "$mock_bin/id" <<'EOF_ID'
+#!/bin/sh
+if [ "${1:-}" = '-u' ]; then
+    printf '0\n'
+    exit 0
+fi
+exec /usr/bin/id "$@"
+EOF_ID
     chmod +x "$mock_bin"/*
 
     output=$(
