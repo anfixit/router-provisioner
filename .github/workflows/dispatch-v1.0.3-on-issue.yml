@@ -1,0 +1,23 @@
+name: Dispatch v1.0.3 patch
+
+on:
+  issues:
+    types:
+      - opened
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    if: >-
+      github.actor == 'anfixit' &&
+      github.event.issue.title == 'router-provisioner apply v1.0.3'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispatch scheduled patch workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run apply-v1.0.3-scheduled.yml --repo ${{ github.repository }} --ref main
