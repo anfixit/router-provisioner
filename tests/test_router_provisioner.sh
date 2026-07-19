@@ -123,6 +123,68 @@ test_input_validation() {
         validate_subscription_url 'file:///etc/shadow'
 }
 
+test_ssh_key_guidance() {
+    output=$(print_ssh_key_help 2>&1)
+
+    assert_contains "$output" 'ssh-keygen -t ed25519' \
+        'SSH key creation command is missing'
+    assert_contains "$output" 'cat ~/.ssh/id_ed25519.pub' \
+        'macOS and Linux public-key command is missing'
+    assert_contains "$output" 'Get-Content' \
+        'PowerShell public-key command is missing'
+    assert_contains "$output" 'type %USERPROFILE%' \
+        'cmd.exe public-key command is missing'
+}
+
+test_public_key_retry() {
+    expected='ssh-ed25519 AAAAC3NzaC1 example'
+    result=$(
+        printf '%s\n' 'not-a-key' "$expected" | \
+            ask_public_key 2>/dev/null
+    )
+
+    assert_equal "$expected" "$result" \
+        'invalid public key must be requested again'
+}
+
+test_wifi_password_retry() {
+    expected='correct-password-123'
+    result=$(
+        printf '%s\n' \
+            'short' \
+            "$expected" \
+            'different-password-456' \
+            "$expected" \
+            "$expected" | \
+            ask_wifi_password 2>/dev/null
+    )
+
+    assert_equal "$expected" "$result" \
+        'Wi-Fi password must retry until length and confirmation pass'
+}
+
+test_wifi_encryption_retry() {
+    result=$(printf '%s\n' '3' '2' | ask_wifi_encryption 2>/dev/null)
+
+    assert_equal 'sae-mixed' "$result" \
+        'invalid Wi-Fi encryption choice must be requested again'
+}
+
+test_dry_run_tracks_root_password() {
+    DRY_RUN=1
+    ASSUME_YES=1
+    ROOT_PASSWORD_AVAILABLE=0
+
+    configure_root_password >/dev/null
+
+    assert_equal '1' "$ROOT_PASSWORD_AVAILABLE" \
+        'dry-run must remember the planned root password'
+
+    DRY_RUN=0
+    ASSUME_YES=0
+    ROOT_PASSWORD_AVAILABLE=0
+}
+
 # White-box test variables are consumed by the sourced runtime.
 # shellcheck disable=SC2034
 test_firmware_plan() {
@@ -411,6 +473,11 @@ main() {
     test_version_comparison
     test_release_parser
     test_input_validation
+    test_ssh_key_guidance
+    test_public_key_retry
+    test_wifi_password_retry
+    test_wifi_encryption_retry
+    test_dry_run_tracks_root_password
     test_firmware_plan
     test_diagnose_integration
     test_root_password_detection

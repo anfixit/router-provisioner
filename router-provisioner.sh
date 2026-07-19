@@ -4,7 +4,7 @@
 set -u
 
 PROGRAM_NAME='router-provisioner'
-PROGRAM_VERSION='1.0.1'
+PROGRAM_VERSION='1.0.2'
 MIN_OPENWRT_VERSION='24.10.0'
 MIN_OVERLAY_FREE_KIB=25600
 MIN_RAM_KIB=65536
@@ -34,6 +34,7 @@ RAM_TOTAL_KIB=0
 RAM_AVAILABLE_KIB=0
 ROOTFS_TYPE='unknown'
 BACKUP_FILE=''
+ROOT_PASSWORD_AVAILABLE=0
 
 print_line() {
     printf '%s\n' "$*"
@@ -785,16 +786,21 @@ configure_root_password() {
     print_line '=== Пароль root ==='
 
     if ! ask_yes_no 'Изменить пароль root?' 'yes'; then
+        if root_has_password; then
+            ROOT_PASSWORD_AVAILABLE=1
+        fi
         warn 'Пароль root оставлен без изменений.'
         return 0
     fi
 
     if [ "$DRY_RUN" -eq 1 ]; then
+        ROOT_PASSWORD_AVAILABLE=1
         info 'DRY-RUN: passwd не запускался.'
         return 0
     fi
 
     passwd root || fatal 'Пароль root не изменён.'
+    ROOT_PASSWORD_AVAILABLE=1
 }
 
 validate_public_key() {
@@ -806,6 +812,46 @@ validate_public_key() {
             return 1
             ;;
     esac
+}
+
+print_ssh_key_help() {
+    cat >&2 <<'EOF_SSH_KEY_HELP'
+SSH-ключ создаётся на вашем компьютере, не на роутере.
+Создать ключ на macOS, Linux или Windows:
+  ssh-keygen -t ed25519
+Показать публичный ключ:
+  macOS / Linux:       cat ~/.ssh/id_ed25519.pub
+  Windows PowerShell:  Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
+  Windows cmd.exe:     type %USERPROFILE%\.ssh\id_ed25519.pub
+Скопируйте всю строку, начинающуюся с ssh-ed25519.
+EOF_SSH_KEY_HELP
+}
+
+ask_public_key() {
+    print_ssh_key_help
+
+    while :; do
+        public_key=$(ask_value \
+            'Публичный SSH-ключ (Enter - оставить вход по паролю)' '') || \
+            return 1
+
+        if [ -z "$public_key" ]; then
+            if [ "$ROOT_PASSWORD_AVAILABLE" -eq 1 ] || \
+                root_has_password; then
+                printf '\n'
+                return 0
+            fi
+            warn 'Сначала добавьте SSH-ключ: рабочего пароля root нет.'
+            continue
+        fi
+
+        if validate_public_key "$public_key"; then
+            printf '%s\n' "$public_key"
+            return 0
+        fi
+
+        warn 'Ключ не распознан. Вставьте содержимое файла .pub целиком.'
+    done
 }
 
 root_has_password() {
@@ -898,14 +944,9 @@ configure_ssh() {
         warn 'Интерфейс lan не найден. SSH не ограничен интерфейсом.'
     fi
 
-    print_line 'Вставьте публичный SSH-ключ или оставьте поле пустым.'
-    public_key=$(ask_value 'Публичный SSH-ключ' '')
+    public_key=$(ask_public_key) || fatal 'Ввод SSH-ключа прерван.'
 
     if [ -n "$public_key" ]; then
-        if ! validate_public_key "$public_key"; then
-            fatal 'Формат SSH-ключа не распознан.'
-        fi
-
         key_dir='/etc/dropbear'
         key_file="$key_dir/authorized_keys"
         if [ "$DRY_RUN" -eq 1 ]; then
@@ -927,9 +968,6 @@ configure_ssh() {
                 'dropbear.@dropbear[0].RootPasswordAuth=on'
         fi
     else
-        if ! root_has_password; then
-            fatal 'Нет ни SSH-ключа, ни рабочего пароля root.'
-        fi
         warn 'SSH-ключ не задан, пароль останется включён на LAN.'
         must_run uci set 'dropbear.@dropbear[0].PasswordAuth=on'
         must_run uci set 'dropbear.@dropbear[0].RootPasswordAuth=on'
@@ -973,6 +1011,53 @@ validate_wifi_password() {
     [ "$length" -ge 12 ] && [ "$length" -le 63 ]
 }
 
+ask_wifi_password() {
+    while :; do
+        wifi_password=$(ask_secret \
+            'Новый пароль Wi-Fi (12-63 символа)') || return 1
+
+        if ! validate_wifi_password "$wifi_password"; then
+            warn 'Нужно от 12 до 63 символов. Попробуйте ещё раз.'
+            wifi_password=''
+            continue
+        fi
+
+        confirmation=$(ask_secret 'Повторите пароль Wi-Fi') || return 1
+        if [ "$wifi_password" != "$confirmation" ]; then
+            warn 'Пароли не совпадают. Попробуйте ещё раз.'
+            wifi_password=''
+            confirmation=''
+            continue
+        fi
+
+        printf '%s\n' "$wifi_password"
+        wifi_password=''
+        confirmation=''
+        return 0
+    done
+}
+
+ask_wifi_encryption() {
+    print_line 'Шифрование: 1 = WPA2, 2 = WPA2/WPA3 mixed' >&2
+
+    while :; do
+        encryption_choice=$(ask_value 'Выбор' '1') || return 1
+        case "$encryption_choice" in
+            1)
+                printf 'psk2\n'
+                return 0
+                ;;
+            2)
+                printf 'sae-mixed\n'
+                return 0
+                ;;
+            *)
+                warn 'Введите 1 или 2.'
+                ;;
+        esac
+    done
+}
+
 configure_wifi() {
     print_line
     print_line '=== Wi-Fi ==='
@@ -1000,27 +1085,15 @@ configure_wifi() {
 
         print_line
         printf 'Точка доступа: %s\n' "$label"
-        ssid=$(ask_value 'SSID' "${current_ssid:-OpenWrt}")
+        ssid=$(ask_value \
+            'Новое имя Wi-Fi (Enter - оставить текущее)' \
+            "${current_ssid:-OpenWrt}") || fatal 'Ввод SSID прерван.'
         [ -n "$ssid" ] || fatal 'SSID не может быть пустым.'
 
-        wifi_password=$(ask_secret 'Пароль Wi-Fi, 12-63 символа')
-        if ! validate_wifi_password "$wifi_password"; then
-            fatal 'Пароль Wi-Fi должен содержать 12-63 символа.'
-        fi
-
-        print_line 'Шифрование: 1 = WPA2, 2 = WPA2/WPA3 mixed'
-        encryption_choice=$(ask_value 'Выбор' '1')
-        case "$encryption_choice" in
-            1)
-                encryption='psk2'
-                ;;
-            2)
-                encryption='sae-mixed'
-                ;;
-            *)
-                fatal 'Неизвестный режим шифрования.'
-                ;;
-        esac
+        wifi_password=$(ask_wifi_password) || \
+            fatal 'Ввод пароля Wi-Fi прерван.'
+        encryption=$(ask_wifi_encryption) || \
+            fatal 'Выбор шифрования прерван.'
 
         must_run uci set "wireless.${section}.ssid=$ssid"
         must_run uci set \
