@@ -1,30 +1,38 @@
 # Router Provisioner
 
-Интерактивный POSIX shell-скрипт для подготовки роутера с OpenWrt и
-развёртывания NetShift с VPN-подпиской.
+[![CI](https://github.com/anfixit/router-provisioner/actions/workflows/ci.yml/badge.svg)](https://github.com/anfixit/router-provisioner/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/anfixit/router-provisioner)](LICENSE)
+[![OpenWrt](https://img.shields.io/badge/OpenWrt-24.10%2B-00B5E2)](https://openwrt.org/)
+[![Shell](https://img.shields.io/badge/shell-POSIX-4EAA25)](router-provisioner.sh)
 
-Проект специально сведён к одному исполняемому файлу. На роутере не нужны
-Python, Docker или сторонний рантайм. Скрипт рассчитан на BusyBox `ash`.
+Интерактивный POSIX shell-установщик для подготовки роутера с OpenWrt и развёртывания NetShift с VPN-подпиской.
 
-## Что делает
+Проект состоит из одного исполняемого файла и не требует Python, Docker или отдельного рантайма на роутере. Скрипт рассчитан на BusyBox `ash`, выполняет предварительную диагностику и не изменяет загрузчик или внутреннюю разметку вслепую.
 
-- определяет модель, `board_name`, target и версию OpenWrt;
-- формирует ссылку Firmware Selector для обнаруженного профиля;
-- показывает безопасные команды обновления через `owut`;
-- проверяет RAM и свободное место в overlay;
-- создаёт резервную копию через `sysupgrade`;
-- при нехватке места предлагает extroot на готовом внешнем разделе;
-- интерактивно настраивает пароль root, hostname, SSH и Wi-Fi;
-- устанавливает NetShift официальным установщиком;
-- принимает ссылку VPN-подписки без вывода секрета в терминал;
-- включает URLTest, автообновление подписки и маршрутизацию;
-- при необходимости направляет российские сервисы, `.ru` и `.su`
-  напрямую;
-- проверяет запуск NetShift и показывает последние сообщения журнала.
+## Возможности
 
-## Что скрипт не делает
+- определение модели, `board_name`, target и версии OpenWrt;
+- формирование ссылки на Firmware Selector для обнаруженного устройства;
+- рекомендации по обновлению через `owut`;
+- проверка RAM и свободного места в overlay;
+- создание резервной копии через `sysupgrade`;
+- безопасная настройка hostname, root-пароля, SSH и Wi-Fi;
+- установка и базовая настройка NetShift;
+- скрытый ввод ссылки VPN-подписки;
+- URLTest и автоматический выбор доступного узла;
+- автоматическое обновление подписки;
+- глобальная VPN-маршрутизация по выбору пользователя;
+- прямой маршрут для российских сервисов, `.ru` и `.su`;
+- безопасный extroot на отдельном внешнем разделе;
+- режимы диагностики и предварительного просмотра.
 
-Скрипт не прошивает заводскую прошивку вслепую и не меняет:
+## Важное ограничение
+
+Router Provisioner не устанавливает OpenWrt поверх заводской прошивки автоматически.
+
+Скрипт запускается после того, как на роутере уже работает OpenWrt. Он может определить установленную версию, модель и target, а затем показать подходящую страницу Firmware Selector и рекомендации по обновлению.
+
+Скрипт намеренно не изменяет:
 
 - U-Boot;
 - MTD и UBI;
@@ -33,84 +41,106 @@ Python, Docker или сторонний рантайм. Скрипт рассч
 - аппаратные Wi-Fi radio-секции;
 - сетевую конфигурацию от другого роутера.
 
-Универсальная внутренняя переразметка невозможна без отдельного профиля
-конкретной модели и аппаратной ревизии. Ошибка в этой части может сделать
-устройство незагружаемым.
-
-Точная ссылка Firmware Selector строится, когда на устройстве уже работает
-OpenWrt и доступны `board_name` и target. Для перехода с заводской прошивки
-нужно сначала проверить модель и ревизию в официальной таблице OpenWrt.
+Универсальная переразметка внутренней памяти невозможна без отдельного профиля конкретной модели и аппаратной ревизии. Ошибка в этой части может сделать устройство незагружаемым.
 
 ## Требования
 
 - OpenWrt 24.10 или новее;
+- запуск от `root`;
+- интерактивный SSH-сеанс с TTY;
 - `opkg` или `apk`;
 - не менее 25 MiB свободного overlay;
-- интерактивный SSH-сеанс с TTY;
-- запуск от `root`;
 - проводное подключение при изменении Wi-Fi.
 
-Менее 64 MiB RAM считается небезопасной конфигурацией. При объёме менее
-128 MiB скрипт показывает предупреждение о возможной нехватке памяти.
+Менее 64 MiB RAM считается небезопасной конфигурацией. При объёме менее 128 MiB скрипт выводит предупреждение.
 
-## Запуск из GitHub
+## Быстрый старт
 
-Подключитесь к роутеру по SSH и выполните:
+### Вариант 1. Одна команда на Mac или Linux
 
-```sh
-cd /tmp
-uclient-fetch -O router-provisioner.sh \
-  https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh
-chmod 700 router-provisioner.sh
-```
-
-Сначала только диагностика:
-
-```sh
-./router-provisioner.sh --diagnose
-```
-
-Затем предварительный просмотр без изменения конфигурации:
-
-```sh
-./router-provisioner.sh --dry-run
-```
-
-Реальное развёртывание:
-
-```sh
-./router-provisioner.sh
-```
-
-На системах без `uclient-fetch` файл можно передать с компьютера:
+Команда подключится к роутеру, скачает скрипт непосредственно на OpenWrt и запустит только диагностику:
 
 ```bash
-scp router-provisioner.sh root@192.168.1.1:/tmp/
+ssh -t root@192.168.1.1 'cd /tmp && uclient-fetch -O router-provisioner.sh https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh && chmod 700 router-provisioner.sh && ./router-provisioner.sh --diagnose'
+```
+
+Для SSH-порта `2810`:
+
+```bash
+ssh -t -p 2810 root@192.168.1.1 'cd /tmp && uclient-fetch -O router-provisioner.sh https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh && chmod 700 router-provisioner.sh && ./router-provisioner.sh --diagnose'
+```
+
+`uclient-fetch` выполняется на роутере, а не на macOS. Поэтому команда запускается через `ssh`.
+
+### Вариант 2. Команда внутри SSH-сеанса OpenWrt
+
+Сначала подключитесь к роутеру:
+
+```bash
 ssh -t root@192.168.1.1
-chmod 700 /tmp/router-provisioner.sh
+```
+
+Затем выполните на роутере одной строкой:
+
+```sh
+cd /tmp && uclient-fetch -O router-provisioner.sh https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh && chmod 700 router-provisioner.sh && ./router-provisioner.sh --diagnose
+```
+
+### Вариант 3. Если на роутере нет `uclient-fetch`
+
+Скопируйте файл с компьютера и запустите диагностику одной командой:
+
+```bash
+scp router-provisioner.sh root@192.168.1.1:/tmp/router-provisioner.sh && ssh -t root@192.168.1.1 'chmod 700 /tmp/router-provisioner.sh && /tmp/router-provisioner.sh --diagnose'
+```
+
+Для SSH-порта `2810`:
+
+```bash
+scp -P 2810 router-provisioner.sh root@192.168.1.1:/tmp/router-provisioner.sh && ssh -t -p 2810 root@192.168.1.1 'chmod 700 /tmp/router-provisioner.sh && /tmp/router-provisioner.sh --diagnose'
+```
+
+## Рекомендуемый порядок запуска
+
+### 1. Диагностика
+
+Ничего не изменяет:
+
+```sh
+/tmp/router-provisioner.sh --diagnose
+```
+
+### 2. Предварительный просмотр
+
+Показывает предполагаемые действия без изменения конфигурации:
+
+```sh
+/tmp/router-provisioner.sh --dry-run
+```
+
+### 3. Реальное развёртывание
+
+Запускает интерактивную настройку:
+
+```sh
 /tmp/router-provisioner.sh
 ```
 
-Для нестандартного SSH-порта:
+Не запускайте реальное развёртывание, пока не проверили вывод `--diagnose` и `--dry-run`.
 
-```bash
-scp -P 2810 router-provisioner.sh root@192.168.1.1:/tmp/
-ssh -t -p 2810 root@192.168.1.1
-```
+## Параметры командной строки
 
-## Режимы
+| Параметр | Назначение |
+|---|---|
+| `--diagnose` | Только диагностика устройства и план обновления OpenWrt |
+| `--dry-run` | Показать действия без изменения конфигурации |
+| `--yes` | Автоматически подтвердить обычные вопросы |
+| `--version` | Показать версию |
+| `--help` | Показать справку |
 
-```text
---diagnose  Только диагностика и план OpenWrt
---dry-run   Показать действия без изменения конфигурации
---yes       Автоматически подтвердить обычные вопросы
---version   Показать версию
---help      Показать справку
-```
+`--yes` не отменяет точное текстовое подтверждение форматирования extroot.
 
-`--yes` не отменяет явное текстовое подтверждение форматирования extroot.
-
-## Настройки NetShift
+## Что настраивается в NetShift
 
 При автоматической настройке создаются:
 
@@ -118,7 +148,7 @@ ssh -t -p 2810 root@192.168.1.1
 - bootstrap DNS `77.88.8.8`;
 - VPN-секция с подпиской;
 - формат подписки Xray для Remnawave и XHTTP;
-- проверка узлов URLTest каждые 3 минуты;
+- URLTest с проверкой узлов каждые 3 минуты;
 - обновление подписки каждый час;
 - глобальный VPN-режим по выбору пользователя;
 - исключение `russia_outside`, `.ru` и `.su` по выбору пользователя.
@@ -129,56 +159,152 @@ ssh -t -p 2810 root@192.168.1.1
 LuCI -> Services -> NetShift -> Component Manager
 ```
 
-Затем установите `sing-box extended`, обновите подписку и перезапустите
-NetShift.
+Установите `sing-box extended`, обновите подписку и перезапустите NetShift.
 
 ## Безопасность SSH
 
-Dropbear не перезапускается во время работы установщика, поэтому смена порта
-не обрывает текущий сеанс. В конце скрипт просит:
+Dropbear не перезапускается во время работы установщика. Это защищает текущий SSH-сеанс от обрыва после смены порта или отключения парольной аутентификации.
 
-1. оставить текущий SSH-сеанс открытым;
-2. перезапустить Dropbear;
-3. проверить вход во второй сессии;
-4. только после успешной проверки закрыть старую сессию.
+После завершения настройки:
 
-Ссылка подписки и пароль Wi-Fi не выводятся в `--dry-run` и не сохраняются в
-репозитории.
+1. оставьте текущий SSH-сеанс открытым;
+2. примените перезапуск Dropbear;
+3. откройте вторую SSH-сессию;
+4. убедитесь, что вход работает;
+5. только после этого закрывайте первую сессию.
+
+Ссылка подписки и пароль Wi-Fi не выводятся в `--dry-run` и не хранятся в репозитории.
 
 ## Extroot
 
-Extroot доступен только для существующего внешнего раздела USB, SD, SATA или
-NVMe. Скрипт:
+Extroot поддерживается только для отдельного внешнего раздела USB, SD, SATA или NVMe.
+
+Скрипт:
 
 - исключает root, overlay, boot и swap;
 - требует точного подтверждения вида `ERASE /dev/sda1`;
 - создаёт резервную копию до форматирования;
 - форматирует только явно выбранный внешний раздел;
-- копирует текущий overlay и настраивает `/etc/config/fstab`.
+- копирует текущий overlay;
+- настраивает `/etc/config/fstab`.
 
-Для x86 следует расширять root-раздел штатным способом, а не использовать
-этот сценарий extroot.
+Для x86 рекомендуется расширять root-раздел штатными средствами, а не использовать этот сценарий extroot.
 
-## Разработка и тесты
+## Восстановление
+
+Перед изменениями скрипт предлагает создать резервную копию OpenWrt через `sysupgrade -b`.
+
+Дополнительно рекомендуется сохранить её на компьютер:
+
+```bash
+scp root@192.168.1.1:/tmp/router-provisioner-backup-*.tar.gz .
+```
+
+Для нестандартного SSH-порта:
+
+```bash
+scp -P 2810 root@192.168.1.1:/tmp/router-provisioner-backup-*.tar.gz .
+```
+
+Не храните единственную резервную копию только во временном каталоге `/tmp` роутера.
+
+## Диагностика проблем
+
+Проверить версию скрипта:
+
+```sh
+/tmp/router-provisioner.sh --version
+```
+
+Проверить свободное место:
+
+```sh
+df -h /overlay
+```
+
+Проверить память:
+
+```sh
+free -m
+```
+
+Проверить NetShift:
+
+```sh
+/etc/init.d/netshift status
+```
+
+Последние сообщения журнала:
+
+```sh
+logread -e netshift | tail -n 100
+```
+
+Проверить конфигурацию UCI:
+
+```sh
+uci show netshift
+```
+
+## Разработка
 
 Структура репозитория:
 
 ```text
-router-provisioner.sh             основной скрипт для роутера
+router-provisioner.sh             основной скрипт для OpenWrt
 tests/test_router_provisioner.sh  тесты POSIX shell
 .github/workflows/ci.yml          CI: syntax, dash, BusyBox ash, ShellCheck
 VERSION                           версия проекта
+LICENSE                           Apache License 2.0
 ```
 
-Локальная проверка:
+Локальная проверка на macOS или Linux:
 
 ```bash
 sh -n router-provisioner.sh
-dash tests/test_router_provisioner.sh
-busybox ash tests/test_router_provisioner.sh
-shellcheck router-provisioner.sh tests/*.sh
 ```
+
+```bash
+dash tests/test_router_provisioner.sh
+```
+
+Проверка BusyBox `ash` через Docker:
+
+```bash
+docker run --rm -v "$PWD:/repo" -w /repo busybox:1.36 ash tests/test_router_provisioner.sh
+```
+
+ShellCheck:
+
+```bash
+shellcheck router-provisioner.sh tests/test_router_provisioner.sh
+```
+
+## Как внести вклад
+
+Перед созданием pull request:
+
+1. создайте отдельную ветку;
+2. внесите минимальные и понятные изменения;
+3. добавьте или обновите тесты;
+4. выполните локальные проверки;
+5. не добавляйте ссылки подписок, пароли, приватные ключи и дампы конфигурации;
+6. опишите модель роутера, версию OpenWrt и сценарий проверки.
+
+Подробности находятся в [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Сообщение об уязвимости
+
+Не публикуйте данные об уязвимости, секреты или конфигурацию реального роутера в открытом issue.
+
+Используйте инструкции из [SECURITY.md](SECURITY.md).
+
+## Кодекс поведения
+
+Участие в проекте регулируется [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Лицензия
 
-Apache License 2.0.
+Проект распространяется по лицензии [Apache License 2.0](LICENSE).
+
+Использование скрипта выполняется на ваш риск. Перед изменением конфигурации убедитесь, что у вас есть резервная копия и физический доступ к роутеру.
