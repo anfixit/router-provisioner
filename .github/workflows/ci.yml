@@ -22,7 +22,7 @@ jobs:
       - name: Run ShellCheck
         id: shellcheck
         continue-on-error: true
-        run: shellcheck router-provisioner.sh tests/*.sh > shellcheck.log 2>&1
+        run: shellcheck -x router-provisioner.sh tests/*.sh > shellcheck.log 2>&1
 
       - name: Upload ShellCheck report
         if: steps.shellcheck.outcome == 'failure'
