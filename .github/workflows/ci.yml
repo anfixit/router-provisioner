@@ -20,7 +20,21 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install --yes -qq busybox shellcheck >/dev/null
 
       - name: Run ShellCheck
-        run: shellcheck router-provisioner.sh tests/*.sh
+        id: shellcheck
+        continue-on-error: true
+        run: shellcheck router-provisioner.sh tests/*.sh > shellcheck.log 2>&1
+
+      - name: Upload ShellCheck report
+        if: steps.shellcheck.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shellcheck-report
+          path: shellcheck.log
+          retention-days: 7
+
+      - name: Fail on ShellCheck warnings
+        if: steps.shellcheck.outcome == 'failure'
+        run: cat shellcheck.log && exit 1
 
       - name: Check POSIX syntax
         run: sh -n router-provisioner.sh && dash -n router-provisioner.sh && busybox ash -n router-provisioner.sh
