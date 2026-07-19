@@ -364,18 +364,26 @@ test_ssh_session_safety() {
 }
 
 test_repository_is_minimal() {
-    runtime_count=$(
-        find "$PROJECT_DIR" -maxdepth 1 -type f -name '*.sh' | \
-            wc -l | tr -d ' '
-    )
+    runtime_count=0
+    for runtime_file in "$PROJECT_DIR"/*.sh; do
+        [ -f "$runtime_file" ] || continue
+        runtime_count=$((runtime_count + 1))
+    done
     assert_equal '1' "$runtime_count" \
         'repository must have one router runtime script'
 
+    secret_file=$(
+        find "$PROJECT_DIR" \
+            \( -type d \( -name '.git' -o -name '.venv' \) \
+                -prune \) -o \
+            \( -type f \( -name '*.pem' -o -name '*.key' \
+                -o -name '.env' \) -print \) | \
+            head -n 1
+    )
+
     TEST_COUNT=$((TEST_COUNT + 1))
-    if find "$PROJECT_DIR" -type f \
-        \( -name '*.pem' -o -name '*.key' -o -name '.env' \) | \
-        grep . >/dev/null; then
-        fail_test 'secret-like files must not be committed'
+    if [ -n "$secret_file" ]; then
+        fail_test "secret-like file found: $secret_file"
     fi
 }
 
