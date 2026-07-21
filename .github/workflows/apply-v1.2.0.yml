@@ -1,0 +1,47 @@
+name: Apply v1.2.0 fix
+
+on:
+  push:
+    branches:
+      - fix/netshift-readiness-v1.2.0
+    paths:
+      - .github/apply_v1_2.py
+      - .github/workflows/apply-v1.2.0.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply transformations
+        run: python3 .github/apply_v1_2.py
+
+      - name: Install shell tools
+        run: sudo apt-get update -qq && sudo apt-get install --yes -qq busybox shellcheck >/dev/null
+
+      - name: Check POSIX syntax
+        run: sh -n router-provisioner.sh && dash -n router-provisioner.sh && busybox ash -n router-provisioner.sh
+
+      - name: Run tests
+        run: dash tests/test_router_provisioner.sh && busybox ash tests/test_router_provisioner.sh
+
+      - name: Run ShellCheck
+        run: shellcheck -x router-provisioner.sh tests/*.sh
+
+      - name: Commit verified changes
+        run: |
+          rm -f .github/apply_v1_2.py .github/workflows/apply-v1.2.0.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: stabilize NetShift XHTTP startup"
+          git push origin HEAD
