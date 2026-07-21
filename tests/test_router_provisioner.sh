@@ -421,8 +421,7 @@ test_xhttp_policy_patch() {
     fixture=$(mktemp -d)
     facade="$fixture/sing_box_config_facade.sh"
     helpers="$fixture/helpers.sh"
-    printf '%s
-' '# helpers fixture' > "$helpers"
+    printf '%s\n' '# helpers fixture' > "$helpers"
     cat > "$facade" <<'EOF_FACADE'
 prepare() {
     jq '
@@ -555,7 +554,7 @@ test_current_netshift_schema() {
         'sing-box check:' \
         'guarded refresh must expose validation errors'
     assert_contains "$script" \
-        'MAX_ATTEMPTS=40' \
+        'MAX_ATTEMPTS=30' \
         'guarded refresh must use bounded readiness polling'
 }
 

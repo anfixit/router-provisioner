@@ -24,8 +24,8 @@ YOUTUBE_DIRECT_LIST='/etc/netshift/rulesets/youtube-direct.lst'
 NETSHIFT_FACADE='/usr/lib/netshift/sing_box_config_facade.sh'
 NETSHIFT_REFRESH_HELPER='/usr/bin/router-provisioner-netshift-refresh'
 NETSHIFT_HELPERS='/usr/lib/netshift/helpers.sh'
-NETSHIFT_READY_ATTEMPTS=40
-NETSHIFT_READY_DELAY=3
+NETSHIFT_READY_ATTEMPTS=30
+NETSHIFT_READY_DELAY=2
 
 DRY_RUN=0
 DIAGNOSE_ONLY=0
@@ -1415,8 +1415,8 @@ HELPERS='/usr/lib/netshift/helpers.sh'
 FACADE='/usr/lib/netshift/sing_box_config_facade.sh'
 CONFIG='/etc/sing-box/config.json'
 SUBSCRIPTIONS='/etc/netshift/subscriptions'
-MAX_ATTEMPTS=40
-READY_DELAY=3
+MAX_ATTEMPTS=30
+READY_DELAY=2
 
 log() {
     logger -t router-provisioner-xhttp "$*"
@@ -1520,7 +1520,7 @@ fakeip_ready() {
 }
 
 configuration_ready() {
-    pgrep -f '[s]ing-box' >/dev/null 2>&1 || return 1
+    pgrep -f '[s]ing-box run' >/dev/null 2>&1 || return 1
     /usr/bin/sing-box check -c "$CONFIG" >/dev/null 2>&1 || return 1
     validate_config || return 1
     fakeip_ready
@@ -1572,8 +1572,8 @@ if ! wait_for_ready; then
     show_check_error
     log 'New subscription rejected; restoring the previous cache'
 
+    rm -rf "$SUBSCRIPTIONS"
     if [ -d "$backup_dir/subscriptions" ]; then
-        rm -rf "$SUBSCRIPTIONS"
         cp -a "$backup_dir/subscriptions" "$SUBSCRIPTIONS"
     fi
     [ -f "$backup_dir/config.json" ] && \
@@ -2069,16 +2069,20 @@ configure_netshift() {
     configure_netshift_cron
 }
 
+netshift_fakeip_ready() {
+    nslookup www.gstatic.com 127.0.0.42 2>/dev/null | \
+        grep -Eq '198\.18\.'
+}
+
 wait_for_netshift_ready() {
     attempt=1
 
     while [ "$attempt" -le "$NETSHIFT_READY_ATTEMPTS" ]; do
-        if pgrep -f '[s]ing-box' >/dev/null 2>&1 && \
+        if pgrep -f '[s]ing-box run' >/dev/null 2>&1 && \
             /usr/bin/sing-box check \
                 -c /etc/sing-box/config.json >/dev/null 2>&1 && \
             validate_xhttp_config /etc/sing-box/config.json && \
-            nslookup www.gstatic.com 127.0.0.42 2>/dev/null | \
-                grep -Eq '198\.18\.'; then
+            netshift_fakeip_ready; then
             return 0
         fi
 
@@ -2104,7 +2108,7 @@ validate_netshift() {
     if ! wait_for_netshift_ready; then
         /usr/bin/sing-box check \
             -c /etc/sing-box/config.json 2>&1 || true
-        fatal 'NetShift не поднял XHTTP-only и FakeIP за 120 секунд.'
+        fatal 'NetShift не поднял XHTTP-only и FakeIP за 60 секунд.'
     fi
 
     info 'NetShift: XHTTP-only, sing-box и FakeIP готовы.'
