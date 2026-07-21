@@ -4,7 +4,7 @@
 set -u
 
 PROGRAM_NAME='router-provisioner'
-PROGRAM_VERSION='1.1.0'
+PROGRAM_VERSION='1.2.0'
 MIN_OPENWRT_VERSION='24.10.0'
 MIN_OVERLAY_FREE_KIB=25600
 MIN_RAM_KIB=65536
@@ -23,6 +23,9 @@ YOUTUBE_UNBLOCK_RELEASE_API='https://api.github.com/repos/'\
 YOUTUBE_DIRECT_LIST='/etc/netshift/rulesets/youtube-direct.lst'
 NETSHIFT_FACADE='/usr/lib/netshift/sing_box_config_facade.sh'
 NETSHIFT_REFRESH_HELPER='/usr/bin/router-provisioner-netshift-refresh'
+NETSHIFT_HELPERS='/usr/lib/netshift/helpers.sh'
+NETSHIFT_READY_ATTEMPTS=40
+NETSHIFT_READY_DELAY=3
 
 DRY_RUN=0
 DIAGNOSE_ONLY=0
@@ -1205,9 +1208,21 @@ install_netshift() {
 }
 
 sing_box_extended_active() {
-    system_info=$(/usr/bin/netshift get_system_info 2>/dev/null || true)
-    printf '%s' "$system_info" | \
-        jq -e '.sing_box_extended == 1' >/dev/null 2>&1
+    version=''
+
+    if [ -x /usr/bin/sing-box ]; then
+        version=$(/usr/bin/sing-box version 2>/dev/null | head -n 1)
+    elif command_exists sing-box; then
+        version=$(sing-box version 2>/dev/null | head -n 1)
+    fi
+
+    case "$version" in
+        *extended*)
+            return 0
+            ;;
+    esac
+
+    return 1
 }
 
 install_sing_box_extended() {
@@ -1239,8 +1254,55 @@ install_sing_box_extended() {
     info 'sing-box extended установлен и проверен.'
 }
 
+patch_netshift_extended_detection() {
+    helpers=${1:-$NETSHIFT_HELPERS}
+    marker='# BEGIN ROUTER_PROVISIONER_EXTENDED_DETECTION'
+
+    [ -r "$helpers" ] || {
+        error "Файл NetShift не найден: $helpers"
+        return 1
+    }
+
+    if grep -F "$marker" "$helpers" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "DRY-RUN: в $helpers была бы исправлена проверка extended."
+        return 0
+    fi
+
+    backup="${helpers}.before-router-provisioner"
+    [ -e "$backup" ] || cp -p "$helpers" "$backup" || return 1
+
+    cat >> "$helpers" <<'EOF_EXTENDED_DETECTION'
+
+# BEGIN ROUTER_PROVISIONER_EXTENDED_DETECTION
+# Use an absolute path: service environments may have a restricted PATH.
+is_sing_box_extended() {
+    local version=""
+
+    if [ -x /usr/bin/sing-box ]; then
+        version="$(/usr/bin/sing-box version 2>/dev/null | head -n 1)"
+    elif command -v sing-box >/dev/null 2>&1; then
+        version="$(sing-box version 2>/dev/null | head -n 1)"
+    fi
+
+    case "$version" in
+        *extended*) return 0 ;;
+    esac
+
+    return 1
+}
+# END ROUTER_PROVISIONER_EXTENDED_DETECTION
+EOF_EXTENDED_DETECTION
+}
+
 patch_netshift_xhttp_policy() {
     facade=${1:-$NETSHIFT_FACADE}
+    helpers=${2:-$NETSHIFT_HELPERS}
+
+    patch_netshift_extended_detection "$helpers" || return 1
 
     [ -r "$facade" ] || {
         error "Файл NetShift не найден: $facade"
@@ -1349,19 +1411,49 @@ install_xhttp_refresh_helper() {
 
 set -u
 
+HELPERS='/usr/lib/netshift/helpers.sh'
 FACADE='/usr/lib/netshift/sing_box_config_facade.sh'
 CONFIG='/etc/sing-box/config.json'
+SUBSCRIPTIONS='/etc/netshift/subscriptions'
+MAX_ATTEMPTS=40
+READY_DELAY=3
 
 log() {
     logger -t router-provisioner-xhttp "$*"
 }
 
-patch_policy() {
-    if grep -F \
-        'select($ob.type == "vless" and' \
-        "$FACADE" >/dev/null 2>&1; then
-        return 0
+patch_extended_detection() {
+    marker='# BEGIN ROUTER_PROVISIONER_EXTENDED_DETECTION'
+
+    [ -r "$HELPERS" ] || return 1
+    grep -F "$marker" "$HELPERS" >/dev/null 2>&1 && return 0
+
+    cat >> "$HELPERS" <<'EOF_EXTENDED_DETECTION'
+
+# BEGIN ROUTER_PROVISIONER_EXTENDED_DETECTION
+# Use an absolute path: service environments may have a restricted PATH.
+is_sing_box_extended() {
+    local version=""
+
+    if [ -x /usr/bin/sing-box ]; then
+        version="$(/usr/bin/sing-box version 2>/dev/null | head -n 1)"
+    elif command -v sing-box >/dev/null 2>&1; then
+        version="$(sing-box version 2>/dev/null | head -n 1)"
     fi
+
+    case "$version" in
+        *extended*) return 0 ;;
+    esac
+
+    return 1
+}
+# END ROUTER_PROVISIONER_EXTENDED_DETECTION
+EOF_EXTENDED_DETECTION
+}
+
+patch_policy() {
+    grep -F 'select($ob.type == "vless" and' \
+        "$FACADE" >/dev/null 2>&1 && return 0
 
     temporary="${FACADE}.router-provisioner.$$"
     if ! awk '
@@ -1371,22 +1463,16 @@ patch_policy() {
                 in_candidates = 1
                 next
             }
-            if (in_candidates &&
-                index($0, "| . as $ob") > 0) {
+            if (in_candidates && index($0, "| . as $ob") > 0) {
                 print "            | select($ob.type == \"vless\" and"
                 print "                     (($ob.transport.type // \"\") == \"xhttp\"))"
                 inserted = inserted + 1
                 in_candidates = 0
             }
         }
-        END {
-            if (inserted != 1) {
-                exit 42
-            }
-        }
+        END {if (inserted != 1) exit 42}
     ' "$FACADE" > "$temporary"; then
         rm -f "$temporary"
-        log 'XHTTP-only policy could not be applied'
         return 1
     fi
 
@@ -1395,6 +1481,8 @@ patch_policy() {
 }
 
 validate_config() {
+    [ -s "$CONFIG" ] || return 1
+
     jq -e '
         [.outbounds[]?
             | select(
@@ -1426,17 +1514,78 @@ validate_config() {
     ' "$CONFIG" >/dev/null 2>&1
 }
 
-patch_policy || exit 1
-/usr/bin/netshift subscription_update || exit 1
-sleep 2
+fakeip_ready() {
+    nslookup www.gstatic.com 127.0.0.42 2>/dev/null | \
+        grep -Eq '198\.18\.'
+}
 
-if ! validate_config; then
-    log 'Unsafe subscription rejected: non-XHTTP or no XHTTP nodes'
-    /etc/init.d/netshift stop >/dev/null 2>&1 || true
+configuration_ready() {
+    pgrep -f '[s]ing-box' >/dev/null 2>&1 || return 1
+    /usr/bin/sing-box check -c "$CONFIG" >/dev/null 2>&1 || return 1
+    validate_config || return 1
+    fakeip_ready
+}
+
+wait_for_ready() {
+    attempt=1
+
+    while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+        configuration_ready && return 0
+        sleep "$READY_DELAY"
+        attempt=$((attempt + 1))
+    done
+
+    return 1
+}
+
+show_check_error() {
+    [ -s "$CONFIG" ] || {
+        log 'sing-box config was not created'
+        return 0
+    }
+
+    /usr/bin/sing-box check -c "$CONFIG" 2>&1 | \
+        while IFS= read -r line; do
+            log "sing-box check: $line"
+        done
+}
+
+backup_dir="/tmp/router-provisioner-netshift.$$"
+rm -rf "$backup_dir"
+mkdir -p "$backup_dir"
+[ -d "$SUBSCRIPTIONS" ] && cp -a "$SUBSCRIPTIONS" "$backup_dir/"
+[ -f "$CONFIG" ] && cp -p "$CONFIG" "$backup_dir/config.json"
+
+patch_extended_detection || exit 1
+patch_policy || exit 1
+
+if ! /usr/bin/netshift subscription_update; then
+    log 'subscription_update returned an error; waiting for final service state'
+fi
+
+if ! wait_for_ready; then
+    log 'NetShift did not become ready; forcing one controlled restart'
+    /etc/init.d/netshift restart >/dev/null 2>&1 || true
+fi
+
+if ! wait_for_ready; then
+    show_check_error
+    log 'New subscription rejected; restoring the previous cache'
+
+    if [ -d "$backup_dir/subscriptions" ]; then
+        rm -rf "$SUBSCRIPTIONS"
+        cp -a "$backup_dir/subscriptions" "$SUBSCRIPTIONS"
+    fi
+    [ -f "$backup_dir/config.json" ] && \
+        cp -p "$backup_dir/config.json" "$CONFIG"
+
+    /etc/init.d/netshift restart >/dev/null 2>&1 || true
+    rm -rf "$backup_dir"
     exit 1
 fi
 
-log 'Subscription updated: XHTTP-only validation passed'
+rm -rf "$backup_dir"
+log 'Subscription updated: XHTTP-only config and FakeIP are ready'
 EOF_XHTTP_REFRESH
 
     chmod 700 "$NETSHIFT_REFRESH_HELPER"
@@ -1605,6 +1754,11 @@ download_youtube_unblock_asset() {
 }
 
 configure_youtube_unblock() {
+    for section in $(uci -q show youtubeUnblock 2>/dev/null | \
+        sed -n 's/^youtubeUnblock\.\([^.=]*\)=section$/\1/p'); do
+        run uci -q delete "youtubeUnblock.${section}"
+    done
+
     must_run uci set \
         'youtubeUnblock.youtubeUnblock=youtubeUnblock'
     must_run uci set \
@@ -1906,18 +2060,33 @@ configure_netshift() {
         restore_netshift_config
         fatal 'Не удалось включить автозапуск NetShift.'
     }
-    if ! /etc/init.d/netshift restart; then
-        restore_netshift_config
-        /etc/init.d/netshift restart >/dev/null 2>&1 || true
-        fatal 'NetShift не запустился. Конфигурация восстановлена.'
-    fi
 
-    sleep 2
+    /etc/init.d/netshift stop >/dev/null 2>&1 || true
     /usr/bin/netshift list_update || \
         fatal 'Списки NetShift не обновились.'
     "$NETSHIFT_REFRESH_HELPER" || \
-        fatal 'Подписка не прошла XHTTP-only проверку.'
+        fatal 'NetShift не собрал рабочую XHTTP-only конфигурацию.'
     configure_netshift_cron
+}
+
+wait_for_netshift_ready() {
+    attempt=1
+
+    while [ "$attempt" -le "$NETSHIFT_READY_ATTEMPTS" ]; do
+        if pgrep -f '[s]ing-box' >/dev/null 2>&1 && \
+            /usr/bin/sing-box check \
+                -c /etc/sing-box/config.json >/dev/null 2>&1 && \
+            validate_xhttp_config /etc/sing-box/config.json && \
+            nslookup www.gstatic.com 127.0.0.42 2>/dev/null | \
+                grep -Eq '198\.18\.'; then
+            return 0
+        fi
+
+        sleep "$NETSHIFT_READY_DELAY"
+        attempt=$((attempt + 1))
+    done
+
+    return 1
 }
 
 validate_netshift() {
@@ -1931,12 +2100,14 @@ validate_netshift() {
 
     sing_box_extended_active || \
         fatal 'Активен не sing-box extended.'
-    pgrep -f '[s]ing-box' >/dev/null 2>&1 || \
-        fatal 'Процесс sing-box не запущен.'
-    validate_xhttp_config /etc/sing-box/config.json || \
-        fatal 'Конфигурация содержит TCP-ноды или не содержит XHTTP.'
 
-    info 'NetShift работает только с VLESS XHTTP-нодами.'
+    if ! wait_for_netshift_ready; then
+        /usr/bin/sing-box check \
+            -c /etc/sing-box/config.json 2>&1 || true
+        fatal 'NetShift не поднял XHTTP-only и FakeIP за 120 секунд.'
+    fi
+
+    info 'NetShift: XHTTP-only, sing-box и FakeIP готовы.'
 }
 
 apply_services() {
