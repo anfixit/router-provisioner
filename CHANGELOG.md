@@ -2,43 +2,82 @@
 
 Все заметные изменения Router Provisioner документируются в этом файле.
 
-Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), а версии следуют [Semantic Versioning](https://semver.org/lang/ru/).
+Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии следуют [Semantic Versioning](https://semver.org/lang/ru/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-21
+
+### Fixed
+
+- Исправлено ложное определение `sing-box extended` в сервисном окружении NetShift 0.9.6.
+- Убрана преждевременная XHTTP-проверка через фиксированный `sleep 2`.
+- Установка больше не запускает NetShift с пустым кешем подписки.
+- Добавлено ограниченное ожидание процесса sing-box, валидного JSON и FakeIP.
+- При невалидном временном JSON журнал получает фактический вывод `sing-box check`.
+- Неудачное обновление подписки восстанавливает предыдущий кеш и конфигурацию.
+- Перед настройкой youtubeUnblock удаляются дублирующиеся секции.
+
+### Changed
+
+- Обновление подписки выполняется через `/usr/bin/router-provisioner-netshift-refresh`.
+- После первой неудачи допускается только один контролируемый перезапуск NetShift.
+- Проверка одного цикла готовности ограничена 60 секундами вместо бесконечного recovery-цикла.
+- README полностью переписан под фактический сценарий XHTTP-only, FakeIP и youtubeUnblock.
+
+## [1.1.0] - 2026-07-19
+
 ### Added
 
-- Полная пользовательская документация с разделением команд для macOS/Linux и OpenWrt.
-- CONTRIBUTING, SECURITY, CODE_OF_CONDUCT и шаблоны GitHub.
-- Явные инструкции по безопасной диагностике, dry-run, backup и проверке SSH.
+- Автоматическая установка `sing-box extended`.
+- Фильтрация подписки по фактическому VLESS-транспорту.
+- Установка и настройка youtubeUnblock.
+- Локальный список YouTube-доменов для прямой маршрутизации.
+- Защищённый cron обновления подписки.
+
+### Fixed
+
+- Исправлен вывод LAN-адреса с CIDR.
+- Исправлено создание root-crontab.
+- Dry-run больше не сообщает о несуществующих изменениях.
+
+## [1.0.2] - 2026-07-19
+
+### Fixed
+
+- Улучшен интерактивный ввод SSH-ключа.
+- Добавлена повторная проверка Wi-Fi-пароля и шифрования.
 
 ## [1.0.1] - 2026-07-19
 
 ### Fixed
 
-- Тесты больше не используют GNU-only параметр `find -maxdepth` и работают на macOS BSD `find`.
+- Тесты совместимы с macOS BSD `find`.
 - Проверка секретоподобных файлов исключает `.venv`.
 
 ### Changed
 
-- Добавлены исключения Python-кэшей и локального виртуального окружения в `.gitignore`.
+- Добавлены исключения Python-кэшей и локального окружения в `.gitignore`.
 
 ## [1.0.0] - 2026-07-19
 
 ### Added
 
 - Определение модели, `board_name`, target и версии OpenWrt.
-- Формирование точной ссылки Firmware Selector.
-- Проверка RAM и свободного места в overlay.
-- Резервное копирование через `sysupgrade`.
-- Интерактивная настройка root, hostname, Dropbear и Wi-Fi.
-- Безопасный extroot для внешнего раздела.
+- Формирование ссылки Firmware Selector.
+- Проверка RAM и overlay.
+- Backup через `sysupgrade`.
+- Настройка root, hostname, Dropbear и Wi-Fi.
+- Безопасный extroot.
 - Установка и настройка NetShift.
-- Скрытый ввод ссылки подписки и Wi-Fi-пароля.
-- URLTest, автообновление подписки и прямой маршрут для российских сервисов.
+- Скрытый ввод подписки и Wi-Fi-пароля.
+- URLTest, автообновление и прямой маршрут российских сервисов.
 - Диагностический и dry-run режимы.
 - POSIX shell-тесты и GitHub Actions CI.
 
-[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/anfixit/router-provisioner/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/anfixit/router-provisioner/compare/v1.0.2...v1.1.0
+[1.0.2]: https://github.com/anfixit/router-provisioner/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/anfixit/router-provisioner/releases/tag/v1.0.1
 [1.0.0]: https://github.com/anfixit/router-provisioner/releases/tag/v1.0.0

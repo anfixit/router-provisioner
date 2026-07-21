@@ -420,6 +420,8 @@ test_resource_guard() {
 test_xhttp_policy_patch() {
     fixture=$(mktemp -d)
     facade="$fixture/sing_box_config_facade.sh"
+    helpers="$fixture/helpers.sh"
+    printf '%s\n' '# helpers fixture' > "$helpers"
     cat > "$facade" <<'EOF_FACADE'
 prepare() {
     jq '
@@ -431,12 +433,18 @@ prepare() {
 }
 EOF_FACADE
 
-    patch_netshift_xhttp_policy "$facade"
-    patch_netshift_xhttp_policy "$facade"
-    count=$(grep -Fc 'select($ob.type == "vless" and' "$facade")
+    patch_netshift_xhttp_policy "$facade" "$helpers"
+    patch_netshift_xhttp_policy "$facade" "$helpers"
+    policy_count=$(grep -Fc 'select($ob.type == "vless" and' "$facade")
+    detection_count=$(grep -Fc \
+        '# BEGIN ROUTER_PROVISIONER_EXTENDED_DETECTION' "$helpers")
 
-    assert_equal '1' "$count" \
+    assert_equal '1' "$policy_count" \
         'XHTTP-only patch must be inserted exactly once'
+    assert_equal '1' "$detection_count" \
+        'extended detection patch must be inserted exactly once'
+    assert_contains "$(cat "$helpers")" '/usr/bin/sing-box version' \
+        'extended detection must use the absolute binary path'
     rm -rf "$fixture"
 }
 
@@ -536,6 +544,18 @@ test_current_netshift_schema() {
     assert_contains "$script" \
         'local_domain_lists=$YOUTUBE_DIRECT_LIST' \
         'local YouTube direct list is not connected'
+    assert_contains "$script" \
+        'wait_for_netshift_ready' \
+        'bounded NetShift readiness wait is missing'
+    assert_contains "$script" \
+        'subscription_update returned an error' \
+        'guarded refresh must tolerate restart races'
+    assert_contains "$script" \
+        'sing-box check:' \
+        'guarded refresh must expose validation errors'
+    assert_contains "$script" \
+        'MAX_ATTEMPTS=30' \
+        'guarded refresh must use bounded readiness polling'
 }
 
 test_youtube_unblock_configuration() {
@@ -553,6 +573,9 @@ test_youtube_unblock_configuration() {
     assert_contains "$script" \
         'kmod-nft-queue kmod-nf-conntrack' \
         'youtubeUnblock kernel dependencies are missing'
+    assert_contains "$script" \
+        'sed -n '"'"'s/^youtubeUnblock' \
+        'duplicate youtubeUnblock sections must be removed'
 }
 
 test_dry_run_final_output() {
