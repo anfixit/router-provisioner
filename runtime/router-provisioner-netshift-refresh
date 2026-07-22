@@ -1,0 +1,55 @@
+#!/bin/ash
+set -u
+
+TAG='router-provisioner-refresh'
+BACKUP="/tmp/router-provisioner-refresh.$$"
+START_HELPER='/usr/bin/router-provisioner-netshift-start'
+LOCK='/tmp/router-provisioner-netshift-refresh.lock'
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+cleanup() {
+    rm -rf "$BACKUP"
+    rmdir "$LOCK" 2>/dev/null || true
+}
+
+trap cleanup 0 HUP INT TERM
+
+mkdir "$LOCK" 2>/dev/null || {
+    log 'another refresh is already running'
+    exit 0
+}
+
+mkdir -p "$BACKUP"
+[ -d /etc/netshift/subscriptions ] && \
+    cp -a /etc/netshift/subscriptions "$BACKUP/"
+[ -f /etc/sing-box/config.json ] && \
+    cp -p /etc/sing-box/config.json "$BACKUP/config.json"
+
+if ! /usr/bin/netshift subscription_update >/dev/null 2>&1; then
+    log 'subscription_update returned an error; validating final state'
+fi
+
+if "$START_HELPER"; then
+    log 'subscription refresh succeeded'
+    exit 0
+fi
+
+log 'subscription refresh failed; restoring previous cache'
+/etc/init.d/netshift stop >/dev/null 2>&1 || true
+rm -rf /etc/netshift/subscriptions
+[ -d "$BACKUP/subscriptions" ] && \
+    cp -a "$BACKUP/subscriptions" /etc/netshift/subscriptions
+[ -f "$BACKUP/config.json" ] && \
+    cp -p "$BACKUP/config.json" /etc/sing-box/config.json
+
+if "$START_HELPER"; then
+    log 'previous subscription cache restored successfully'
+else
+    log 'rollback did not restore NetShift; service remains stopped'
+    /etc/init.d/netshift stop >/dev/null 2>&1 || true
+fi
+
+exit 1

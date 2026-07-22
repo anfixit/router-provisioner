@@ -1,0 +1,126 @@
+#!/bin/ash
+set -u
+
+TAG='router-provisioner-boot'
+RULESET_URL='https://github.com/itdoginfo/allow-domains/releases/latest/download/russia_outside.srs'
+LOCK='/tmp/router-provisioner-netshift-start.lock'
+PREFLIGHT='/tmp/russia_outside.preflight.srs'
+MAX_WAN_WAIT=120
+MAX_READY_ATTEMPTS=45
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+cleanup() {
+    rmdir "$LOCK" 2>/dev/null || true
+    rm -f "$PREFLIGHT"
+}
+
+trap cleanup 0 HUP INT TERM
+
+mkdir "$LOCK" 2>/dev/null || {
+    log 'another startup is already running'
+    exit 0
+}
+
+wait_for_wan() {
+    elapsed=0
+
+    while [ "$elapsed" -lt "$MAX_WAN_WAIT" ]; do
+        if ubus call network.interface.wan status 2>/dev/null | \
+            grep -q '"up"[[:space:]]*:[[:space:]]*true' && \
+            ip route show default 2>/dev/null | grep -q '^default '; then
+            return 0
+        fi
+
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    return 1
+}
+
+download_ruleset_preflight() {
+    rm -f "$PREFLIGHT"
+
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch -q -O "$PREFLIGHT" "$RULESET_URL"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$PREFLIGHT" "$RULESET_URL"
+    else
+        return 127
+    fi
+
+    [ -s "$PREFLIGHT" ]
+}
+
+service_ready() {
+    pgrep -f '[s]ing-box run' >/dev/null 2>&1 || return 1
+    [ -s /etc/sing-box/config.json ] || return 1
+    /usr/bin/sing-box check -c /etc/sing-box/config.json \
+        >/dev/null 2>&1 || return 1
+    nslookup www.gstatic.com 127.0.0.42 2>/dev/null | \
+        grep -Eq '198\.18\.'
+}
+
+wait_for_service() {
+    attempt=0
+
+    while [ "$attempt" -lt "$MAX_READY_ATTEMPTS" ]; do
+        service_ready && return 0
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    return 1
+}
+
+prepare_lists() {
+    /etc/init.d/netshift stop >/dev/null 2>&1 || true
+
+    if ! /usr/bin/netshift list_update >/dev/null 2>&1; then
+        log 'list update failed before startup'
+        return 1
+    fi
+
+    # list_update may touch service state; force a clean start boundary.
+    /etc/init.d/netshift stop >/dev/null 2>&1 || true
+}
+
+attempt_start() {
+    prepare_lists || return 1
+    /etc/init.d/netshift start >/dev/null 2>&1 || true
+    wait_for_service
+}
+
+if ! wait_for_wan; then
+    log 'WAN was not ready after 120 seconds'
+    /etc/init.d/netshift stop >/dev/null 2>&1 || true
+    exit 1
+fi
+
+if ! download_ruleset_preflight; then
+    log 'direct ruleset preflight failed'
+    /etc/init.d/netshift stop >/dev/null 2>&1 || true
+    exit 1
+fi
+
+if attempt_start; then
+    log 'NetShift is ready'
+    exit 0
+fi
+
+log 'first start failed; retrying once'
+if attempt_start; then
+    log 'NetShift recovered on the second attempt'
+    exit 0
+fi
+
+log 'NetShift failed twice; stopping it to restore ordinary DNS and routing'
+logread -e netshift -e sing-box | tail -n 80 | \
+    while IFS= read -r line; do
+        log "diagnostic: $line"
+    done
+/etc/init.d/netshift stop >/dev/null 2>&1 || true
+exit 1
