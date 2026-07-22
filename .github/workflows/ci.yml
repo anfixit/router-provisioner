@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install shell tools
         run: |
@@ -24,13 +24,13 @@ jobs:
       - name: ShellCheck
         run: |
           shellcheck -x -e SC1090,SC2034,SC2317 \
-            router-provisioner.sh lib/*.sh tests/*.sh
+            router-provisioner.sh lib/*.sh runtime/* tests/*.sh
 
       - name: POSIX syntax
         run: |
-          sh -n router-provisioner.sh lib/*.sh
-          dash -n router-provisioner.sh lib/*.sh
-          busybox ash -n router-provisioner.sh lib/*.sh
+          sh -n router-provisioner.sh lib/*.sh runtime/*
+          dash -n router-provisioner.sh lib/*.sh runtime/*
+          busybox ash -n router-provisioner.sh lib/*.sh runtime/*
 
       - name: Tests with dash
         run: dash tests/test_router_provisioner.sh
