@@ -134,9 +134,9 @@ version_ge() {
             left_count = split(left, left_parts, ".")
             right_count = split(right, right_parts, ".")
             count = left_count > right_count ? left_count : right_count
-            for (index = 1; index <= count; index++) {
-                left_value = number(left_parts[index])
-                right_value = number(right_parts[index])
+            for (part = 1; part <= count; part++) {
+                left_value = number(left_parts[part])
+                right_value = number(right_parts[part])
                 if (left_value > right_value) exit 0
                 if (left_value < right_value) exit 1
             }
