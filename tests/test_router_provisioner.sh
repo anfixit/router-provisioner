@@ -154,8 +154,8 @@ test_guarded_boot_contract() {
 test_launcher_preserves_interactive_stdin() {
     source=$(cat "$PROJECT_DIR/router-provisioner.sh")
 
-    assert_not_contains "$source" 'curl | sh' \
-        'launcher must not recommend pipe execution'
+    assert_contains "$source" 'Не используйте curl | sh.' \
+        'launcher must explain why pipe execution is unsupported'
     assert_contains "$source" "exec /bin/sh \"\$RUNTIME_DIR/main.sh\"" \
         'launcher must execute the downloaded runtime as a file'
 }
