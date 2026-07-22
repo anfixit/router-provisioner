@@ -156,8 +156,9 @@ test_launcher_preserves_interactive_stdin() {
 
     assert_contains "$source" 'Не используйте curl | sh.' \
         'launcher must explain why pipe execution is unsupported'
-    assert_contains "$source" "exec /bin/sh \"\$RUNTIME_DIR/main.sh\"" \
-        'launcher must execute the downloaded runtime as a file'
+    assert_contains "$source" \
+        'exec /bin/sh "$RUNTIME_DIR/main.sh" "$@"' \
+        'launcher must execute the runtime file and forward arguments'
 }
 
 test_version_comparison
