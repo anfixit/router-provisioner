@@ -33,10 +33,29 @@ jobs:
           busybox ash -n router-provisioner.sh lib/*.sh runtime/*
 
       - name: Tests with dash
-        run: dash tests/test_router_provisioner.sh
+        id: dash_tests
+        continue-on-error: true
+        run: dash -x tests/test_router_provisioner.sh > test-dash.log 2>&1
 
       - name: Tests with BusyBox ash
-        run: busybox ash tests/test_router_provisioner.sh
+        id: ash_tests
+        continue-on-error: true
+        run: busybox ash -x tests/test_router_provisioner.sh > test-ash.log 2>&1
+
+      - name: Upload shell test reports
+        if: steps.dash_tests.outcome == 'failure' || steps.ash_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shell-test-reports
+          path: test-*.log
+          retention-days: 7
+
+      - name: Fail on shell test errors
+        if: steps.dash_tests.outcome == 'failure' || steps.ash_tests.outcome == 'failure'
+        run: |
+          cat test-dash.log
+          cat test-ash.log
+          exit 1
 
       - name: Secret regression scan
         run: |
