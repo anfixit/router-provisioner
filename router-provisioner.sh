@@ -1,6 +1,6 @@
 #!/bin/sh
 # Router Provisioner bootstrap launcher for OpenWrt.
-# Downloads the versioned runtime modules without consuming interactive stdin.
+# Downloads versioned runtime files without consuming interactive stdin.
 
 set -eu
 
@@ -47,20 +47,35 @@ main() {
         exit 0
     fi
 
-    [ "$(id -u 2>/dev/null || printf 1)" -eq 0 ] || fatal 'Запустите скрипт от root.'
+    [ "$(id -u 2>/dev/null || printf 1)" -eq 0 ] || \
+        fatal 'Запустите скрипт от root.'
     [ -r /etc/openwrt_release ] || fatal 'OpenWrt не обнаружен.'
 
     case " $* " in
         *' --diagnose '*) : ;;
-        *) [ -t 0 ] || fatal 'Нужен интерактивный SSH-сеанс. Не используйте curl | sh.' ;;
+        *)
+            [ -t 0 ] || \
+                fatal 'Нужен интерактивный SSH-сеанс. Не используйте curl | sh.'
+            ;;
     esac
 
-    RUNTIME_DIR=$(mktemp -d "/tmp/${PROGRAM}.XXXXXX") || fatal 'Не удалось создать временный каталог.'
+    RUNTIME_DIR=$(mktemp -d "/tmp/${PROGRAM}.XXXXXX") || \
+        fatal 'Не удалось создать временный каталог.'
 
-    for module in common system netshift main; do
+    for module in common system netshift lifecycle main; do
         destination="$RUNTIME_DIR/${module}.sh"
-        fetch_file "lib/${module}.sh" "$destination" || fatal "Не удалось скачать lib/${module}.sh из ветки ${REF}."
+        fetch_file "lib/${module}.sh" "$destination" || \
+            fatal "Не удалось скачать lib/${module}.sh из ref ${REF}."
         [ -s "$destination" ] || fatal "Модуль lib/${module}.sh пуст."
+    done
+
+    for helper in \
+        router-provisioner-netshift-start \
+        router-provisioner-netshift-refresh; do
+        destination="$RUNTIME_DIR/$helper"
+        fetch_file "runtime/$helper" "$destination" || \
+            fatal "Не удалось скачать runtime/$helper из ref ${REF}."
+        [ -s "$destination" ] || fatal "Runtime helper $helper пуст."
     done
 
     ROUTER_PROVISIONER_RUNTIME_DIR=$RUNTIME_DIR
