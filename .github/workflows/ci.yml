@@ -35,12 +35,12 @@ jobs:
       - name: Tests with dash
         id: dash_tests
         continue-on-error: true
-        run: dash -x tests/test_router_provisioner.sh > test-dash.log 2>&1
+        run: dash tests/test_router_provisioner.sh > test-dash.log 2>&1
 
       - name: Tests with BusyBox ash
         id: ash_tests
         continue-on-error: true
-        run: busybox ash -x tests/test_router_provisioner.sh > test-ash.log 2>&1
+        run: busybox ash tests/test_router_provisioner.sh > test-ash.log 2>&1
 
       - name: Upload shell test reports
         if: steps.dash_tests.outcome == 'failure' || steps.ash_tests.outcome == 'failure'
