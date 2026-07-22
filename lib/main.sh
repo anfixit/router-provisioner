@@ -15,6 +15,8 @@ RUNTIME_DIR=${ROUTER_PROVISIONER_RUNTIME_DIR:-}
 . "$RUNTIME_DIR/system.sh"
 # shellcheck source=lib/netshift.sh
 . "$RUNTIME_DIR/netshift.sh"
+# shellcheck source=lib/lifecycle.sh
+. "$RUNTIME_DIR/lifecycle.sh"
 
 usage() {
     cat <<EOF_USAGE
@@ -30,8 +32,7 @@ EOF_USAGE
 
 print_final_report() {
     printf '\n=== Готово ===\n'
-    [ -n "$CONFIG_BACKUP" ] && \
-        printf 'Backup: %s\n' "$CONFIG_BACKUP"
+    [ -n "$CONFIG_BACKUP" ] && printf 'Backup: %s\n' "$CONFIG_BACKUP"
     printf 'Проверка: netshift global_check\n'
     printf 'Журнал старта: logread -e router-provisioner-boot\n'
     printf 'Безопасное обновление: %s\n' "$REFRESH_HELPER"
@@ -59,8 +60,7 @@ main() {
     install_netshift
     install_extended_sing_box
     configure_netshift
-    install_boot_guard
-    install_refresh_helper
+    install_lifecycle_helpers
     start_and_validate_netshift
     print_final_report
 }
