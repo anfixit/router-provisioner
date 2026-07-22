@@ -67,6 +67,8 @@ CONFIG_BACKUP=''
 . "$PROJECT_DIR/lib/system.sh"
 # shellcheck source=../lib/netshift.sh
 . "$PROJECT_DIR/lib/netshift.sh"
+# shellcheck source=../lib/lifecycle.sh
+. "$PROJECT_DIR/lib/lifecycle.sh"
 
 test_version_comparison() {
     assert_true 'newer OpenWrt must pass' \
@@ -134,21 +136,35 @@ test_dry_run_redacts_subscriptions() {
 }
 
 test_guarded_boot_contract() {
-    source=$(cat "$PROJECT_DIR/lib/netshift.sh")
+    source=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
+    lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
 
     assert_contains "$source" 'WAN was not ready after 120 seconds' \
         'WAN readiness timeout is missing'
     assert_contains "$source" 'russia_outside.preflight.srs' \
         'remote ruleset preflight is missing'
+    assert_contains "$source" '/usr/bin/netshift list_update' \
+        'lists must be prepared before NetShift starts'
     assert_contains "$source" 'first start failed; retrying once' \
         'bounded second attempt is missing'
     assert_contains "$source" \
         'stopping it to restore ordinary DNS and routing' \
         'fail-open cleanup is missing'
-    assert_contains "$source" '/etc/init.d/netshift disable' \
+    assert_contains "$lifecycle" '/etc/init.d/netshift disable' \
         'native NetShift boot must be disabled'
-    assert_contains "$source" 'START=99' \
+    assert_contains "$lifecycle" 'START=99' \
         'guard service must start after ordinary network services'
+}
+
+test_refresh_contract() {
+    source=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-refresh")
+
+    assert_contains "$source" 'cp -a /etc/netshift/subscriptions' \
+        'refresh must back up subscription cache'
+    assert_contains "$source" 'restoring previous cache' \
+        'refresh rollback is missing'
+    assert_contains "$source" 'service remains stopped' \
+        'failed rollback must leave a safe stopped state'
 }
 
 test_launcher_preserves_interactive_stdin() {
@@ -159,6 +175,8 @@ test_launcher_preserves_interactive_stdin() {
     assert_contains "$source" \
         'exec /bin/sh "$RUNTIME_DIR/main.sh" "$@"' \
         'launcher must execute the runtime file and forward arguments'
+    assert_contains "$source" 'runtime/$helper' \
+        'launcher must download lifecycle runtime helpers'
 }
 
 test_version_comparison
@@ -166,6 +184,7 @@ test_public_key_validation
 test_fetcher_selection
 test_dry_run_redacts_subscriptions
 test_guarded_boot_contract
+test_refresh_contract
 test_launcher_preserves_interactive_stdin
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"
