@@ -14,12 +14,15 @@ install_lifecycle_helpers() {
         return 0
     fi
 
-    install -m 700 \
-        "$runtime_dir/router-provisioner-netshift-start" \
-        "$BOOT_HELPER" || fatal 'Failed to install NetShift start helper.'
-    install -m 700 \
-        "$runtime_dir/router-provisioner-netshift-refresh" \
-        "$REFRESH_HELPER" || fatal 'Failed to install NetShift refresh helper.'
+    cp "$runtime_dir/router-provisioner-netshift-start" \
+        "$BOOT_HELPER" || fatal 'Failed to copy NetShift start helper.'
+    chmod 700 "$BOOT_HELPER" || \
+        fatal 'Failed to set permissions on NetShift start helper.'
+
+    cp "$runtime_dir/router-provisioner-netshift-refresh" \
+        "$REFRESH_HELPER" || fatal 'Failed to copy NetShift refresh helper.'
+    chmod 700 "$REFRESH_HELPER" || \
+        fatal 'Failed to set permissions on NetShift refresh helper.'
 
     cat > "$BOOT_SERVICE" <<'EOF_SERVICE'
 #!/bin/sh /etc/rc.common
