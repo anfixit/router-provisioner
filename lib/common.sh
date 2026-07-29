@@ -4,7 +4,7 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION=${ROUTER_PROVISIONER_VERSION:-2.0.0}
+VERSION=${ROUTER_PROVISIONER_VERSION:-2.1.0}
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -158,6 +158,66 @@ fetch_to_file() {
     else
         return 127
     fi
+}
+
+github_latest_tag() {
+    repository=$1
+
+    if command_exists curl; then
+        redirect=$(curl -sI -o /dev/null -w '%{redirect_url}' \
+            --connect-timeout 5 -m 15 -A "$PROGRAM" \
+            "https://github.com/${repository}/releases/latest" \
+            2>/dev/null || true)
+        case "$redirect" in
+            */releases/tag/*)
+                tag=${redirect##*/releases/tag/}
+                case "$tag" in
+                    ''|*/*) tag='' ;;
+                esac
+                if [ -n "$tag" ]; then
+                    printf '%s\n' "$tag"
+                    return 0
+                fi
+                ;;
+        esac
+    fi
+
+    latest_json="$TMP_DIR/gh-latest-$(cache_key "$repository").json"
+    fetch_to_file \
+        "https://api.github.com/repos/${repository}/releases/latest" \
+        "$latest_json" || return 1
+    tag=$(sed -n \
+        's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$latest_json" | head -n 1)
+    [ -n "$tag" ] || return 1
+
+    printf '%s\n' "$tag"
+}
+
+cache_key() {
+    printf '%s' "$*" | tr -c 'A-Za-z0-9._-' '-'
+}
+
+github_asset_url() {
+    repository=$1
+    tag=$2
+    pattern=$3
+
+    release_json="$TMP_DIR/gh-release-$(cache_key "$repository$tag").json"
+    if [ ! -s "$release_json" ]; then
+        fetch_to_file \
+            "https://api.github.com/repos/${repository}/releases/tags/${tag}" \
+            "$release_json" || return 1
+    fi
+
+    url=$(grep -o \
+        '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' \
+        "$release_json" | \
+        sed 's/.*"\(https:[^"]*\)"$/\1/' | \
+        grep -E "$pattern" | head -n 1)
+    [ -n "$url" ] || return 1
+
+    printf '%s\n' "$url"
 }
 
 parse_arguments() {

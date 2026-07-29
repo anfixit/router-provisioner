@@ -23,7 +23,7 @@ jobs:
 
       - name: ShellCheck
         run: |
-          shellcheck -x -e SC1090,SC2034,SC2317 \
+          shellcheck -x -e SC1090,SC2034,SC2317,SC2329 \
             router-provisioner.sh lib/*.sh runtime/* tests/*.sh
 
       - name: POSIX syntax

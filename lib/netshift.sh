@@ -1,6 +1,7 @@
 #!/bin/sh
 # NetShift installation, configuration and guarded lifecycle.
 
+NETSHIFT_REPOSITORY='yandexru45/netshift'
 NETSHIFT_INSTALLER='https://raw.githubusercontent.com/yandexru45/netshift/refs/heads/main/install.sh'
 RUSSIA_OUTSIDE_URL='https://github.com/itdoginfo/allow-domains/releases/latest/download/russia_outside.srs'
 BOOT_HELPER='/usr/bin/router-provisioner-netshift-start'
@@ -27,9 +28,30 @@ wait_for_wan() {
     return 1
 }
 
+netshift_installed_version() {
+    [ -x /usr/bin/netshift ] || return 0
+    version=$(/usr/bin/netshift show_version 2>/dev/null | head -n 1) || true
+    printf '%s\n' "${version#v}"
+}
+
 install_netshift() {
-    if [ -x /usr/bin/netshift ] && [ -x /etc/init.d/netshift ]; then
-        log 'NetShift уже установлен.'
+    installed=$(netshift_installed_version)
+    latest=$(github_latest_tag "$NETSHIFT_REPOSITORY" || true)
+    latest=${latest#v}
+
+    if [ -n "$installed" ]; then
+        log "Установленный NetShift: $installed"
+    fi
+
+    if [ -n "$latest" ]; then
+        log "Последний релиз NetShift: $latest"
+    else
+        warn 'Не удалось определить последний релиз NetShift.'
+    fi
+
+    if [ -n "$installed" ] && [ -n "$latest" ] && \
+        version_ge "$installed" "$latest"; then
+        log 'NetShift уже последней версии.'
         return 0
     fi
 
@@ -38,13 +60,36 @@ install_netshift() {
         fatal 'Не удалось скачать официальный установщик NetShift.'
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        log 'Официальный установщик NetShift был бы запущен.'
+        if [ -n "$installed" ]; then
+            log "Официальный установщик обновил бы NetShift до ${latest:-latest}."
+        else
+            log 'Официальный установщик NetShift был бы запущен.'
+        fi
         return 0
     fi
 
-    sh "$installer" || fatal 'Установка NetShift завершилась ошибкой.'
+    warn 'Официальный установщик NetShift может задать свои вопросы.'
+    warn 'Он предложит удалить https-dns-proxy, если тот установлен.'
+
+    if sh "$installer"; then
+        :
+    elif [ -n "$installed" ]; then
+        warn "Обновление не удалось, остаётся установленный NetShift $installed."
+        return 0
+    else
+        fatal 'Установка NetShift завершилась ошибкой.'
+    fi
+
     [ -x /usr/bin/netshift ] && [ -x /etc/init.d/netshift ] || \
         fatal 'NetShift установлен не полностью.'
+
+    current=$(netshift_installed_version)
+    log "Активная версия NetShift: ${current:-неизвестна}"
+
+    if [ -n "$latest" ] && [ -n "$current" ] && \
+        ! version_ge "$current" "$latest"; then
+        warn "Ожидался NetShift $latest, установлен $current."
+    fi
 }
 
 install_extended_sing_box() {
@@ -123,12 +168,25 @@ configure_netshift() {
     uci_delete netshift.RU_DIRECT
 
     run uci set 'netshift.settings=settings'
-    run uci set 'netshift.settings.dns_type=udp'
-    run uci set 'netshift.settings.dns_server=1.1.1.1'
+    run uci set 'netshift.settings.dns_type=doh'
+    run uci set 'netshift.settings.dns_server=dns.adguard-dns.com'
     run uci set 'netshift.settings.bootstrap_dns_server=77.88.8.8'
-    run uci set 'netshift.settings.global_proxy=1'
-    run uci set 'netshift.settings.enable_ipv6=0'
+    run uci set 'netshift.settings.dns_rewrite_ttl=60'
+    run uci set 'netshift.settings.enable_output_network_interface=0'
+    run uci set 'netshift.settings.enable_badwan_interface_monitoring=0'
+    run uci set 'netshift.settings.enable_yacd=0'
+    run uci set 'netshift.settings.disable_quic=0'
+    run uci set 'netshift.settings.update_interval=1d'
     run uci set 'netshift.settings.download_lists_via_proxy=0'
+    run uci set 'netshift.settings.dont_touch_dhcp=0'
+    run uci set 'netshift.settings.config_path=/etc/sing-box/config.json'
+    run uci set 'netshift.settings.cache_path=/tmp/sing-box/cache.db'
+    run uci set 'netshift.settings.log_level=warn'
+    run uci set 'netshift.settings.exclude_ntp=0'
+    run uci set 'netshift.settings.shutdown_correctly=0'
+    run uci set 'netshift.settings.dns_via_outbound=0'
+    run uci set 'netshift.settings.block_doh=0'
+    run uci set 'netshift.settings.enable_ipv6=0'
     uci_delete netshift.settings.source_network_interfaces
     run uci add_list \
         'netshift.settings.source_network_interfaces=br-lan'
@@ -137,16 +195,19 @@ configure_netshift() {
     run uci set 'netshift.VPN.connection_type=proxy'
     run uci set 'netshift.VPN.proxy_config_type=subscription'
     run uci set 'netshift.VPN.subscription_format_preference=xray'
-    run uci set 'netshift.VPN.subscription_allow_insecure=0'
+    run uci set 'netshift.VPN.subscription_insecure=0'
     run uci set 'netshift.VPN.subscription_group_mode=off'
     run uci set 'netshift.VPN.subscription_update_interval=disabled'
     run uci set 'netshift.VPN.urltest_check_interval=3m'
     run uci set 'netshift.VPN.urltest_tolerance=50'
     run uci set \
         'netshift.VPN.urltest_testing_url=https://www.gstatic.com/generate_204'
+    run uci set 'netshift.VPN.enable_udp_over_tcp=0'
     run uci set 'netshift.VPN.global_proxy=1'
     run uci set 'netshift.VPN.user_domain_list_type=disabled'
     run uci set 'netshift.VPN.user_subnet_list_type=disabled'
+    run uci set 'netshift.VPN.mixed_proxy_enabled=0'
+    run uci set 'netshift.VPN.resolve_real_ip_for_routing=0'
     uci_delete netshift.VPN.subscription_url
 
     subscriptions_file="$TMP_DIR/subscriptions"
@@ -176,191 +237,6 @@ configure_netshift() {
     run uci add_list \
         "netshift.RU_DIRECT.local_domain_lists=$YOUTUBE_LIST"
     run uci commit netshift
-}
-
-install_boot_guard() {
-    if [ "$DRY_RUN" -eq 1 ]; then
-        log "Были бы установлены $BOOT_HELPER и $BOOT_SERVICE"
-        return 0
-    fi
-
-    cat > "$BOOT_HELPER" <<'EOF_BOOT_HELPER'
-#!/bin/ash
-set -u
-TAG='router-provisioner-boot'
-RULESET_URL='https://github.com/itdoginfo/allow-domains/releases/latest/download/russia_outside.srs'
-LOCK='/tmp/router-provisioner-netshift-start.lock'
-PREFLIGHT='/tmp/russia_outside.preflight.srs'
-
-log() { logger -t "$TAG" "$*"; }
-cleanup() {
-    rmdir "$LOCK" 2>/dev/null || true
-    rm -f "$PREFLIGHT"
-}
-trap cleanup 0 HUP INT TERM
-mkdir "$LOCK" 2>/dev/null || {
-    log 'another startup is already running'
-    exit 0
-}
-
-elapsed=0
-while [ "$elapsed" -lt 120 ]; do
-    if ubus call network.interface.wan status 2>/dev/null | \
-        grep -q '"up"[[:space:]]*:[[:space:]]*true' && \
-        ip route show default 2>/dev/null | grep -q '^default '; then
-        break
-    fi
-    sleep 2
-    elapsed=$((elapsed + 2))
-done
-
-[ "$elapsed" -lt 120 ] || {
-    log 'WAN was not ready after 120 seconds'
-    exit 1
-}
-
-if command -v uclient-fetch >/dev/null 2>&1; then
-    uclient-fetch -q -O "$PREFLIGHT" "$RULESET_URL" || {
-        log 'ruleset preflight failed'
-        exit 1
-    }
-elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$PREFLIGHT" "$RULESET_URL" || {
-        log 'ruleset preflight failed'
-        exit 1
-    }
-else
-    log 'no downloader available for ruleset preflight'
-    exit 1
-fi
-
-[ -s "$PREFLIGHT" ] || {
-    log 'ruleset preflight returned an empty file'
-    exit 1
-}
-
-ready() {
-    pgrep -f '[s]ing-box run' >/dev/null 2>&1 || return 1
-    /usr/bin/sing-box check -c /etc/sing-box/config.json \
-        >/dev/null 2>&1 || return 1
-    nslookup www.gstatic.com 127.0.0.42 2>/dev/null | \
-        grep -Eq '198\.18\.'
-}
-
-attempt_start() {
-    /etc/init.d/netshift stop >/dev/null 2>&1 || true
-    /etc/init.d/netshift start >/dev/null 2>&1 || true
-    count=0
-    while [ "$count" -lt 45 ]; do
-        ready && return 0
-        sleep 2
-        count=$((count + 1))
-    done
-    return 1
-}
-
-if attempt_start; then
-    log 'NetShift is ready'
-    exit 0
-fi
-
-log 'first start failed; retrying once'
-if attempt_start; then
-    log 'NetShift recovered on the second attempt'
-    exit 0
-fi
-
-log 'NetShift failed twice; stopping it to restore ordinary DNS and routing'
-/etc/init.d/netshift stop >/dev/null 2>&1 || true
-exit 1
-EOF_BOOT_HELPER
-    chmod 700 "$BOOT_HELPER"
-
-    cat > "$BOOT_SERVICE" <<'EOF_BOOT_SERVICE'
-#!/bin/sh /etc/rc.common
-START=99
-STOP=10
-USE_PROCD=1
-
-start_service() {
-    procd_open_instance
-    procd_set_param command /usr/bin/router-provisioner-netshift-start
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
-}
-
-stop_service() {
-    /etc/init.d/netshift stop >/dev/null 2>&1 || true
-}
-EOF_BOOT_SERVICE
-    chmod 755 "$BOOT_SERVICE"
-
-    /etc/init.d/netshift stop >/dev/null 2>&1 || true
-    /etc/init.d/netshift disable >/dev/null 2>&1 || true
-    "$BOOT_SERVICE" enable
-}
-
-install_refresh_helper() {
-    if [ "$DRY_RUN" -eq 1 ]; then
-        log "Был бы установлен $REFRESH_HELPER"
-        return 0
-    fi
-
-    cat > "$REFRESH_HELPER" <<'EOF_REFRESH'
-#!/bin/ash
-set -u
-TAG='router-provisioner-refresh'
-BACKUP="/tmp/router-provisioner-refresh.$$"
-
-log() { logger -t "$TAG" "$*"; }
-cleanup() { rm -rf "$BACKUP"; }
-trap cleanup 0 HUP INT TERM
-mkdir -p "$BACKUP"
-
-[ -d /etc/netshift/subscriptions ] && \
-    cp -a /etc/netshift/subscriptions "$BACKUP/"
-[ -f /etc/sing-box/config.json ] && \
-    cp -p /etc/sing-box/config.json "$BACKUP/config.json"
-
-/usr/bin/netshift subscription_update >/dev/null 2>&1 || true
-count=0
-while [ "$count" -lt 45 ]; do
-    if pgrep -f '[s]ing-box run' >/dev/null 2>&1 && \
-        /usr/bin/sing-box check -c /etc/sing-box/config.json \
-            >/dev/null 2>&1 && \
-        nslookup www.gstatic.com 127.0.0.42 2>/dev/null | \
-            grep -Eq '198\.18\.'; then
-        log 'subscription refresh succeeded'
-        exit 0
-    fi
-    sleep 2
-    count=$((count + 1))
-done
-
-log 'subscription refresh failed; restoring previous cache'
-rm -rf /etc/netshift/subscriptions
-[ -d "$BACKUP/subscriptions" ] && \
-    cp -a "$BACKUP/subscriptions" /etc/netshift/subscriptions
-[ -f "$BACKUP/config.json" ] && \
-    cp -p "$BACKUP/config.json" /etc/sing-box/config.json
-/etc/init.d/netshift restart >/dev/null 2>&1 || true
-exit 1
-EOF_REFRESH
-    chmod 700 "$REFRESH_HELPER"
-
-    mkdir -p /etc/crontabs
-    touch /etc/crontabs/root
-    temporary="/tmp/router-provisioner-cron.$$"
-    grep -v 'router-provisioner-netshift-refresh' \
-        /etc/crontabs/root > "$temporary" || true
-    {
-        cat "$temporary"
-        printf '17 * * * * %s\n' "$REFRESH_HELPER"
-    } > /etc/crontabs/root
-    rm -f "$temporary"
-    chmod 600 /etc/crontabs/root
-    /etc/init.d/cron restart >/dev/null 2>&1 || true
 }
 
 start_and_validate_netshift() {

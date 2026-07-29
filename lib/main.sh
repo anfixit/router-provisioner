@@ -15,6 +15,8 @@ RUNTIME_DIR=${ROUTER_PROVISIONER_RUNTIME_DIR:-}
 . "$RUNTIME_DIR/system.sh"
 # shellcheck source=lib/netshift.sh
 . "$RUNTIME_DIR/netshift.sh"
+# shellcheck source=lib/youtubeunblock.sh
+. "$RUNTIME_DIR/youtubeunblock.sh"
 # shellcheck source=lib/lifecycle.sh
 . "$RUNTIME_DIR/lifecycle.sh"
 
@@ -33,7 +35,8 @@ EOF_USAGE
 print_final_report() {
     printf '\n=== Готово ===\n'
     [ -n "$CONFIG_BACKUP" ] && printf 'Backup: %s\n' "$CONFIG_BACKUP"
-    printf 'Проверка: netshift global_check\n'
+    printf 'Проверка NetShift: netshift global_check\n'
+    printf 'Проверка youtubeUnblock: %s status\n' "$YOUTUBEUNBLOCK_SERVICE"
     printf 'Журнал старта: logread -e router-provisioner-boot\n'
     printf 'Безопасное обновление: %s\n' "$REFRESH_HELPER"
     warn 'Dropbear не перезапущен. Проверьте новый вход во втором терминале.'
@@ -60,6 +63,9 @@ main() {
     install_netshift
     install_extended_sing_box
     configure_netshift
+    install_youtubeunblock
+    configure_youtubeunblock
+    start_youtubeunblock
     install_lifecycle_helpers
     start_and_validate_netshift
     print_final_report

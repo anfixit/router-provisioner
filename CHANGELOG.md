@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-07-29
+
+### Added
+
+- Возвращена установка и настройка youtubeUnblock (`lib/youtubeunblock.sh`), потерянная при переходе на 2.0.
+- youtubeUnblock ставится последним релизом с GitHub по архитектуре роутера и формату пакета (`apk`/`ipk`), вместе с `luci-app-youtubeUnblock`.
+- Общие helper-функции `github_latest_tag` и `github_asset_url` для работы с релизами GitHub.
+- Тесты на выбор ассета по архитектуре, на сценарий обновления NetShift и на соответствие настроек референсу.
+
+### Fixed
+
+- NetShift больше не пропускается, если уже установлен: версия сравнивается с последним релизом, и при отставании запускается официальный установщик.
+- Исправлено имя опции `netshift.VPN.subscription_insecure`; ранее записывалась несуществующая `subscription_allow_insecure`.
+- Убрана несуществующая опция `netshift.settings.global_proxy` (`global_proxy` задаётся в секции, а не в `settings`).
+- `VERSION` синхронизирован с версией в скриптах.
+
+### Changed
+
+- Настройки NetShift приведены к референсной конфигурации: DoH через `dns.adguard-dns.com`, `dns_rewrite_ttl`, `update_interval`, `log_level`, пути конфигурации и кеша.
+- Удалён мёртвый код `install_boot_guard` и `install_refresh_helper` из `lib/netshift.sh`; lifecycle живёт только в `lib/lifecycle.sh` и `runtime/`.
+- README переписан по структуре типового open-source проекта.
+
 ## [1.2.0] - 2026-07-21
 
 ### Fixed
@@ -75,7 +97,8 @@
 - Диагностический и dry-run режимы.
 - POSIX shell-тесты и GitHub Actions CI.
 
-[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/anfixit/router-provisioner/compare/v1.2.0...v2.1.0
 [1.2.0]: https://github.com/anfixit/router-provisioner/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/anfixit/router-provisioner/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/anfixit/router-provisioner/compare/v1.0.1...v1.0.2

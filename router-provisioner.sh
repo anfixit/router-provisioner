@@ -5,7 +5,7 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION='2.0.0'
+VERSION='2.1.0'
 REPOSITORY='anfixit/router-provisioner'
 REF=${ROUTER_PROVISIONER_REF:-main}
 RUNTIME_DIR=''
@@ -62,7 +62,7 @@ main() {
     RUNTIME_DIR=$(mktemp -d "/tmp/${PROGRAM}.XXXXXX") || \
         fatal 'Не удалось создать временный каталог.'
 
-    for module in common system netshift lifecycle main; do
+    for module in common system netshift youtubeunblock lifecycle main; do
         destination="$RUNTIME_DIR/${module}.sh"
         fetch_file "lib/${module}.sh" "$destination" || \
             fatal "Не удалось скачать lib/${module}.sh из ref ${REF}."
