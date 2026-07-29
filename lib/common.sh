@@ -4,7 +4,7 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION=${ROUTER_PROVISIONER_VERSION:-2.1.0}
+VERSION=${ROUTER_PROVISIONER_VERSION:-2.1.1}
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -149,12 +149,17 @@ fetch_to_file() {
     url=$1
     destination=$2
 
+    # Prefer IPv4. On routers whose IPv6 route is absent or broken the AAAA
+    # attempt dies with "Operation not permitted" before any request is sent,
+    # so fall back to the unforced call for IPv6-only networks.
     if command_exists uclient-fetch; then
-        uclient-fetch -q -O "$destination" "$url"
+        uclient-fetch -4 -q -O "$destination" "$url" 2>/dev/null || \
+            uclient-fetch -q -O "$destination" "$url"
     elif command_exists wget; then
         wget -q -O "$destination" "$url"
     elif command_exists curl; then
-        curl -fsSL "$url" -o "$destination"
+        curl -4 -fsSL "$url" -o "$destination" 2>/dev/null || \
+            curl -fsSL "$url" -o "$destination"
     else
         return 127
     fi

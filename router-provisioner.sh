@@ -5,7 +5,7 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION='2.1.0'
+VERSION='2.1.1'
 REPOSITORY='anfixit/router-provisioner'
 REF=${ROUTER_PROVISIONER_REF:-main}
 RUNTIME_DIR=''
@@ -30,12 +30,16 @@ fetch_file() {
     destination=$2
     url="https://raw.githubusercontent.com/${REPOSITORY}/${REF}/${remote_path}"
 
+    # Prefer IPv4: a missing IPv6 route makes the AAAA attempt fail with
+    # "Operation not permitted" before the request leaves the router.
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch -q -O "$destination" "$url"
+        uclient-fetch -4 -q -O "$destination" "$url" 2>/dev/null || \
+            uclient-fetch -q -O "$destination" "$url"
     elif command -v wget >/dev/null 2>&1; then
         wget -q -O "$destination" "$url"
     elif command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" -o "$destination"
+        curl -4 -fsSL "$url" -o "$destination" 2>/dev/null || \
+            curl -fsSL "$url" -o "$destination"
     else
         return 127
     fi

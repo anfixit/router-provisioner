@@ -77,37 +77,34 @@ Router Provisioner решает три задачи:
 
 ## Быстрый старт
 
-Все команды выполняются **на роутере** от `root`.
+Зайдите на роутер по SSH под `root` и выполните одну команду:
+
+```sh
+cd /tmp && uclient-fetch -4 -q -O rp.sh https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh && chmod +x rp.sh && ./rp.sh
+```
+
+Она скачает скрипт в `/tmp` и сразу запустит его. Дальше скрипт сам задаст
+вопросы: hostname, SSH-ключ, Wi-Fi, ссылки подписки. Пароли и ссылки вводятся
+со скрытым эхо.
+
+Хотите сначала посмотреть, что произойдёт, ничего не меняя — допишите
+`--dry-run`:
+
+```sh
+cd /tmp && uclient-fetch -4 -q -O rp.sh https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh && chmod +x rp.sh && ./rp.sh --dry-run
+```
+
+Скачанный `rp.sh` остаётся в `/tmp`, повторно качать не нужно — запускайте
+`/tmp/rp.sh` с любыми флагами.
+
+Если команда завершилась с `Failed to send request: Operation not permitted`
+или другой ошибкой загрузки — см.
+[Роутер не может скачать скрипт](#частые-проблемы).
 
 > [!IMPORTANT]
 > Не запускайте установщик через `curl | sh`. Конвейер забирает стандартный
-> ввод, и скрипт не сможет прочитать ваши ответы. Скачайте файл, потом запустите.
-
-```sh
-cd /tmp || exit 1
-rm -f router-provisioner.sh
-
-if command -v uclient-fetch >/dev/null 2>&1; then
-    uclient-fetch -q -O router-provisioner.sh \
-        https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh
-elif command -v wget >/dev/null 2>&1; then
-    wget -q -O router-provisioner.sh \
-        https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh
-else
-    echo 'Не найден uclient-fetch или wget' >&2
-    exit 1
-fi
-
-chmod 700 router-provisioner.sh
-exec </dev/tty >/dev/tty 2>&1
-./router-provisioner.sh
-```
-
-Сначала посмотрите, что произойдёт, ничего не меняя:
-
-```sh
-/tmp/router-provisioner.sh --dry-run
-```
+> ввод, и скрипт не сможет прочитать ваши ответы. Поэтому в команде выше
+> скачивание и запуск разделены через `&&`, а не через конвейер.
 
 ## Режимы запуска
 
@@ -309,6 +306,64 @@ nslookup openwrt.org
 ```
 
 ### Частые проблемы
+
+<details>
+<summary><b>Роутер не может скачать скрипт</b></summary>
+
+Типичная ошибка:
+
+```text
+Failed to send request: Operation not permitted
+```
+
+`Operation not permitted` приходит от `uclient-fetch` на этапе установки
+соединения — запрос не ушёл вообще. Скрипт тут ни при чём, проблема на уровне
+сети роутера. Три причины по убыванию частоты.
+
+**1. Нет рабочего IPv6-маршрута.** Имя резолвится в AAAA, клиент идёт по IPv6,
+ядро возвращает `EPERM`. Проверка:
+
+```sh
+uclient-fetch -4 -q -O /tmp/test.bin https://raw.githubusercontent.com/anfixit/router-provisioner/main/VERSION
+```
+
+Если с `-4` работает — причина в этом. Блок из шага 1 уже пробует `-4` первым.
+
+**2. DNS завёрнут на неработающий резолвер.** Признак — `nslookup` не отвечает
+или отдаёт `127.0.0.42`. Это FakeIP-резолвер NetShift при остановленном
+sing-box, тот самый сценарий из [`docs/AUDIT.md`](docs/AUDIT.md):
+
+```sh
+/etc/init.d/netshift stop
+```
+
+```sh
+/etc/init.d/dnsmasq restart
+```
+
+**3. WAN не поднят.** Проверка:
+
+```sh
+ip route show default
+```
+
+Пусто — значит, до настройки прокси дело не дошло, разбирайтесь с WAN.
+
+Общая диагностика, если ни одно не подошло:
+
+```sh
+ping -4 -c 3 1.1.1.1
+```
+
+```sh
+nft list ruleset | head -60
+```
+
+Пинг идёт, а имена не резолвятся — чисто DNS. Видны цепочки netshift или
+tproxy при остановленном сервисе — остались правила от упавшего запуска,
+лечится `/etc/init.d/firewall restart`.
+
+</details>
 
 <details>
 <summary><b>Официальный установщик NetShift задаёт вопросы</b></summary>

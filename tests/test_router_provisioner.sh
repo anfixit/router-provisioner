@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.1.0'
+VERSION='2.1.1'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -108,6 +108,50 @@ EOF_FETCH
         fetch_to_file 'https://example.test/file' "$fixture/result"
     assert_equal 'ok' "$(cat "$fixture/result")" \
         'uclient-fetch invocation is incorrect'
+    rm -rf "$fixture"
+}
+
+test_fetcher_prefers_ipv4_then_falls_back() {
+    fixture=$(mktemp -d)
+    mkdir -p "$fixture/bin"
+
+    # Records every invocation and fails the -4 attempt, the way a router
+    # without an IPv6 route fails the AAAA connection with EPERM.
+    cat > "$fixture/bin/uclient-fetch" <<'EOF_FETCH'
+#!/bin/sh
+forced=0
+destination=''
+for argument in "$@"; do
+    [ "$argument" = '-4' ] && forced=1
+done
+printf '%s\n' "$forced" >> "$FETCH_LOG"
+[ "$forced" -eq 1 ] && exit 1
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-O' ]; then
+        destination=$2
+        break
+    fi
+    shift
+done
+printf 'fallback' > "$destination"
+EOF_FETCH
+    chmod +x "$fixture/bin/uclient-fetch"
+
+    FETCH_LOG="$fixture/log"
+    export FETCH_LOG
+    : > "$FETCH_LOG"
+
+    PATH="$fixture/bin:$PATH" \
+        fetch_to_file 'https://example.test/file' "$fixture/result"
+
+    assert_equal '1' "$(head -n 1 "$FETCH_LOG")" \
+        'IPv4 must be forced on the first attempt'
+    assert_equal '0' "$(sed -n '2p' "$FETCH_LOG")" \
+        'a failed IPv4 attempt must fall back to the unforced call'
+    assert_equal 'fallback' "$(cat "$fixture/result")" \
+        'the fallback attempt must still produce the file'
+
+    unset FETCH_LOG
     rm -rf "$fixture"
 }
 
@@ -332,6 +376,7 @@ test_youtubeunblock_is_wired_in() {
 test_version_comparison
 test_public_key_validation
 test_fetcher_selection
+test_fetcher_prefers_ipv4_then_falls_back
 test_dry_run_redacts_subscriptions
 test_guarded_boot_contract
 test_refresh_contract

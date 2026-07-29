@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-07-29
+
+### Fixed
+
+- Загрузка файлов принудительно идёт по IPv4 с откатом на обычный вызов. На роутерах без рабочего IPv6-маршрута попытка по AAAA обрывалась с `Failed to send request: Operation not permitted` ещё до отправки запроса — падал и bootstrap-блок из README, и скачивание модулей внутри скрипта.
+
+### Changed
+
+- Быстрый старт в README сведён к одной команде вместо копирования многострочного блока.
+- Добавлен раздел «Роутер не может скачать скрипт» с разбором трёх причин ошибки загрузки.
+
 ## [2.1.0] - 2026-07-29
 
 ### Added
@@ -97,7 +108,8 @@
 - Диагностический и dry-run режимы.
 - POSIX shell-тесты и GitHub Actions CI.
 
-[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v2.1.1...HEAD
+[2.1.1]: https://github.com/anfixit/router-provisioner/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/anfixit/router-provisioner/compare/v1.2.0...v2.1.0
 [1.2.0]: https://github.com/anfixit/router-provisioner/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/anfixit/router-provisioner/compare/v1.0.2...v1.1.0
