@@ -62,6 +62,16 @@ print_diagnostics() {
     printf 'Target:             %s\n' "${target:-не определён}"
     printf 'Архитектура:        %s\n' "${architecture:-не определена}"
     printf 'Пакетный менеджер:  %s\n' "$manager"
+
+    uplink_device=$(default_route_device)
+    if [ -n "$uplink_device" ]; then
+        uplink_name=$(uplink_interface "$uplink_device" || true)
+        printf 'Аплинк:             %s%s\n' "$uplink_device" \
+            "${uplink_name:+ (${uplink_name})}"
+    else
+        printf 'Аплинк:             нет default-маршрута\n'
+    fi
+
     printf 'Свободный overlay:  %s MiB\n' \
         "$(awk -v value="$overlay_free_kib" 'BEGIN {printf "%.1f", value / 1024}')"
     printf 'RAM:                %s MiB\n' \

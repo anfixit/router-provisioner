@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-07-30
+
+### Fixed
+
+- Аплинк определяется по фактическому default-маршруту, а не по интерфейсу с именем `wan`. Установка падала с «WAN не поднялся за 120 секунд» на Wi-Fi-клиенте, `wwan` и PPPoE, а guard-сервис останавливал NetShift после каждой перезагрузки.
+
+### Added
+
+- Строка `Аплинк:` в блоке диагностики — показывает устройство и имя интерфейса.
+- Раздел README про ошибку «За 120 секунд не появился default-маршрут».
+
 ## [2.1.1] - 2026-07-29
 
 ### Fixed
@@ -108,7 +119,8 @@
 - Диагностический и dry-run режимы.
 - POSIX shell-тесты и GitHub Actions CI.
 
-[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v2.1.2...HEAD
+[2.1.2]: https://github.com/anfixit/router-provisioner/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/anfixit/router-provisioner/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/anfixit/router-provisioner/compare/v1.2.0...v2.1.0
 [1.2.0]: https://github.com/anfixit/router-provisioner/compare/v1.1.0...v1.2.0

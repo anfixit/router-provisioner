@@ -300,7 +300,6 @@ logread -e router-provisioner-boot
 Затем проверьте:
 
 ```sh
-ubus call network.interface.wan status
 ip route show default
 nslookup openwrt.org
 ```
@@ -362,6 +361,30 @@ nft list ruleset | head -60
 Пинг идёт, а имена не резолвятся — чисто DNS. Видны цепочки netshift или
 tproxy при остановленном сервисе — остались правила от упавшего запуска,
 лечится `/etc/init.d/firewall restart`.
+
+</details>
+
+<details>
+<summary><b>«За 120 секунд не появился default-маршрут»</b></summary>
+
+Скрипт ждёт не интерфейс с именем `wan`, а любой интерфейс, который держит
+default-маршрут — подойдут кабельный WAN, PPPoE, `wwan` и Wi-Fi-клиент.
+Сообщение означает, что маршрута нет вообще:
+
+```sh
+ip route show default
+```
+
+Пусто — разбирайтесь с аплинком, к NetShift это отношения не имеет. Строка
+вида `default via ... dev ...` есть, а ошибка всё равно появляется — пришлите
+вывод в issue.
+
+Определённый аплинк печатается в блоке диагностики при каждом запуске, строка
+`Аплинк:`. Быстрая проверка без установки:
+
+```sh
+/tmp/rp.sh --diagnose
+```
 
 </details>
 

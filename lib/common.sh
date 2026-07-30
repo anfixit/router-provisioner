@@ -4,7 +4,7 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION=${ROUTER_PROVISIONER_VERSION:-2.1.1}
+VERSION=${ROUTER_PROVISIONER_VERSION:-2.1.2}
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -163,6 +163,28 @@ fetch_to_file() {
     else
         return 127
     fi
+}
+
+default_route_device() {
+    ip route show default 2>/dev/null | \
+        awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}'
+}
+
+uplink_interface() {
+    device=$1
+    [ -n "$device" ] || return 1
+
+    for name in $(ubus list 'network.interface.*' 2>/dev/null | \
+        sed 's/^network\.interface\.//'); do
+        l3_device=$(ubus call "network.interface.$name" status 2>/dev/null | \
+            jsonfilter -e '@.l3_device' 2>/dev/null)
+        if [ "$l3_device" = "$device" ]; then
+            printf '%s\n' "$name"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 github_latest_tag() {

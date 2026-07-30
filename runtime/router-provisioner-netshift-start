@@ -24,13 +24,17 @@ mkdir "$LOCK" 2>/dev/null || {
     exit 0
 }
 
+# Wait for a default route rather than an interface literally named "wan":
+# the uplink may be a Wi-Fi client, wwan or pppoe. The ruleset preflight
+# download right after this proves the link actually carries traffic.
 wait_for_wan() {
     elapsed=0
 
     while [ "$elapsed" -lt "$MAX_WAN_WAIT" ]; do
-        if ubus call network.interface.wan status 2>/dev/null | \
-            grep -q '"up"[[:space:]]*:[[:space:]]*true' && \
-            ip route show default 2>/dev/null | grep -q '^default '; then
+        device=$(ip route show default 2>/dev/null | \
+            awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
+        if [ -n "$device" ]; then
+            log "uplink device is $device"
             return 0
         fi
 
@@ -95,7 +99,7 @@ attempt_start() {
 }
 
 if ! wait_for_wan; then
-    log 'WAN was not ready after 120 seconds'
+    log 'no default route after 120 seconds; uplink is not ready'
     /etc/init.d/netshift stop >/dev/null 2>&1 || true
     exit 1
 fi

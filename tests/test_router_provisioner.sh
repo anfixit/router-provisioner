@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.1.1'
+VERSION='2.1.2'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -155,6 +155,38 @@ EOF_FETCH
     rm -rf "$fixture"
 }
 
+test_uplink_detection_is_interface_agnostic() {
+    fixture=$(mktemp -d)
+    mkdir -p "$fixture/bin"
+
+    # A Wi-Fi client uplink: the device is phy1-sta0, not "wan". This is the
+    # layout that made the hardcoded wan check time out on a real router.
+    cat > "$fixture/bin/ip" <<'EOF_IP'
+#!/bin/sh
+printf 'default via 192.168.1.1 dev phy1-sta0  src 192.168.1.144 \n'
+printf '192.168.1.0/24 dev br-lan scope link  src 10.65.77.1 \n'
+EOF_IP
+    chmod +x "$fixture/bin/ip"
+
+    assert_equal 'phy1-sta0' \
+        "$(PATH="$fixture/bin:$PATH" default_route_device)" \
+        'the default route device must be detected for a Wi-Fi client uplink'
+
+    PATH="$fixture/bin:$PATH" assert_true 'wait_for_wan must accept any uplink' \
+        wait_for_wan 2
+
+    cat > "$fixture/bin/ip" <<'EOF_IP_EMPTY'
+#!/bin/sh
+exit 0
+EOF_IP_EMPTY
+    chmod +x "$fixture/bin/ip"
+
+    assert_equal '' "$(PATH="$fixture/bin:$PATH" default_route_device)" \
+        'no default route must yield an empty device'
+
+    rm -rf "$fixture"
+}
+
 test_dry_run_redacts_subscriptions() {
     fixture=$(mktemp -d)
     TMP_DIR=$fixture
@@ -185,8 +217,10 @@ test_guarded_boot_contract() {
     source=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
     lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
 
-    assert_contains "$source" 'WAN was not ready after 120 seconds' \
-        'WAN readiness timeout is missing'
+    assert_contains "$source" 'no default route after 120 seconds' \
+        'uplink readiness timeout is missing'
+    assert_not_contains "$source" 'network.interface.wan' \
+        'the uplink must not be hardcoded to an interface named wan'
     assert_contains "$source" 'russia_outside.preflight.srs' \
         'remote ruleset preflight is missing'
     assert_contains "$source" '/usr/bin/netshift list_update' \
@@ -377,6 +411,7 @@ test_version_comparison
 test_public_key_validation
 test_fetcher_selection
 test_fetcher_prefers_ipv4_then_falls_back
+test_uplink_detection_is_interface_agnostic
 test_dry_run_redacts_subscriptions
 test_guarded_boot_contract
 test_refresh_contract

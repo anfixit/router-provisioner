@@ -10,14 +10,16 @@ BOOT_SERVICE='/etc/init.d/router-provisioner-netshift'
 YOUTUBE_LIST='/etc/netshift/rulesets/youtube-direct.lst'
 SUBSCRIPTIONS=''
 
+# The uplink is whatever carries the default route. Assuming an interface
+# literally named "wan" broke Wi-Fi-client, wwan and pppoe uplinks. Real
+# reachability is proven right after by the ruleset preflight download.
 wait_for_wan() {
     timeout=${1:-120}
     elapsed=0
 
     while [ "$elapsed" -lt "$timeout" ]; do
-        if ubus call network.interface.wan status 2>/dev/null | \
-            grep -q '"up"[[:space:]]*:[[:space:]]*true' && \
-            ip route show default 2>/dev/null | grep -q '^default '; then
+        device=$(default_route_device)
+        if [ -n "$device" ]; then
             return 0
         fi
 
@@ -245,7 +247,8 @@ start_and_validate_netshift() {
         return 0
     fi
 
-    wait_for_wan 120 || fatal 'WAN не поднялся за 120 секунд.'
+    wait_for_wan 120 || \
+        fatal 'За 120 секунд не появился default-маршрут. Проверьте аплинк.'
     preflight_file="$TMP_DIR/russia_outside.srs"
     fetch_to_file "$RUSSIA_OUTSIDE_URL" "$preflight_file" && \
         [ -s "$preflight_file" ] || \
