@@ -31,11 +31,13 @@ STOP=10
 USE_PROCD=1
 
 start_service() {
+    # One-shot boot task: it starts NetShift, verifies it and exits. Never add
+    # respawn here - procd would restart it seconds after every exit, and each
+    # run stops and restarts NetShift, which flaps the connection endlessly.
     procd_open_instance
     procd_set_param command /usr/bin/router-provisioner-netshift-start
     procd_set_param stdout 1
     procd_set_param stderr 1
-    procd_set_param respawn 3600 5 0
     procd_close_instance
 }
 

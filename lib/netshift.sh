@@ -8,7 +8,9 @@ BOOT_HELPER='/usr/bin/router-provisioner-netshift-start'
 REFRESH_HELPER='/usr/bin/router-provisioner-netshift-refresh'
 BOOT_SERVICE='/etc/init.d/router-provisioner-netshift'
 YOUTUBE_LIST='/etc/netshift/rulesets/youtube-direct.lst'
+MAX_SUBSCRIPTIONS=2
 SUBSCRIPTIONS=''
+SUBSCRIPTION_COUNT=0
 
 # The uplink is whatever carries the default route. Assuming an interface
 # literally named "wan" broke Wi-Fi-client, wwan and pppoe uplinks. Real
@@ -114,17 +116,34 @@ install_extended_sing_box() {
         fatal 'Активен не sing-box extended.'
 }
 
+# Subscriptions are optional. Everything else is still configured, so the
+# remaining step is pasting the URL into LuCI later. SUBSCRIPTION_COUNT
+# survives the wipe of SUBSCRIPTIONS and decides whether NetShift may start.
 read_subscriptions() {
     SUBSCRIPTIONS=''
+    SUBSCRIPTION_COUNT=0
     subscription_number=1
 
-    while :; do
+    printf '\n'
+    log 'Ссылку подписки можно не вводить: нажмите Enter, чтобы пропустить.'
+    log 'Тогда всё остальное настроится, а подписку добавите в LuCI позже.'
+
+    while [ "$subscription_number" -le "$MAX_SUBSCRIPTIONS" ]; do
+        # A bare assignment would abort the run under set -e when the reader
+        # hits end of input, for example on Ctrl-D.
         subscription_url=$(ask_secret \
-            "Ссылка подписки #$subscription_number")
+            "Ссылка подписки #$subscription_number (Enter - пропустить)") || \
+            subscription_url=''
+
+        [ -n "$subscription_url" ] || break
 
         case "$subscription_url" in
             https://*) : ;;
-            *) fatal 'Ссылка подписки должна начинаться с https://.' ;;
+            *)
+                warn 'Ссылка должна начинаться с https://. Пропущена.'
+                subscription_number=$((subscription_number + 1))
+                continue
+                ;;
         esac
 
         if [ -z "$SUBSCRIPTIONS" ]; then
@@ -133,11 +152,23 @@ read_subscriptions() {
             SUBSCRIPTIONS="$SUBSCRIPTIONS
 $subscription_url"
         fi
+        SUBSCRIPTION_COUNT=$((SUBSCRIPTION_COUNT + 1))
 
-        [ "$ASSUME_YES" -eq 1 ] && break
-        ask_yes_no 'Добавить ещё одну подписку?' no || break
         subscription_number=$((subscription_number + 1))
+
+        # Plain "[ ... ] && break" would return 1 as the last command of the
+        # loop body and set -e would kill the whole run.
+        if [ "$ASSUME_YES" -eq 1 ]; then
+            break
+        fi
     done
+
+    if [ "$SUBSCRIPTION_COUNT" -eq 0 ]; then
+        warn 'Подписка не задана. NetShift настроен, но запускаться не будет.'
+        warn 'Добавьте ссылку в LuCI: Services -> NetShift -> Секции -> VPN.'
+    else
+        log "Принято ссылок подписки: $SUBSCRIPTION_COUNT"
+    fi
 }
 
 write_youtube_direct_list() {
@@ -230,6 +261,9 @@ configure_netshift() {
     run uci set 'netshift.RU_DIRECT.global_proxy=0'
     run uci add_list \
         'netshift.RU_DIRECT.community_lists=russia_outside'
+    # Upstream-maintained YouTube list, kept alongside the local one below so
+    # YouTube stays on the direct path where youtubeUnblock can repair it.
+    run uci add_list 'netshift.RU_DIRECT.community_lists=youtube'
     run uci set 'netshift.RU_DIRECT.user_domain_list_type=text'
     direct_domains='.ru
 .su'
@@ -244,6 +278,15 @@ configure_netshift() {
 start_and_validate_netshift() {
     if [ "$DRY_RUN" -eq 1 ]; then
         log 'NetShift не запускался в dry-run.'
+        return 0
+    fi
+
+    # Without a subscription NetShift has no proxy outbound. Starting it would
+    # point dnsmasq at a resolver that answers nothing and take the LAN offline,
+    # so leave it stopped until a subscription appears.
+    if [ "$SUBSCRIPTION_COUNT" -eq 0 ]; then
+        log 'Подписки нет, NetShift не запускается.'
+        log 'Добавьте подписку в LuCI и запустите скрипт повторно.'
         return 0
     fi
 

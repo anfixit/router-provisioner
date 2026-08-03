@@ -2,80 +2,20 @@
 
 # Router Provisioner
 
-**Интерактивный POSIX shell-провижионер для OpenWrt 24.10+**
+**Настройка OpenWrt-роутера одной командой**
 
-Ставит и настраивает NetShift, sing-box extended и youtubeUnblock одной командой —
-с резервной копией, проверками и безопасным откатом.
+NetShift, обход блокировок YouTube и блокировка рекламы — за пять минут,
+с резервной копией и защитой от потери интернета.
 
 [![CI](https://github.com/anfixit/router-provisioner/actions/workflows/ci.yml/badge.svg)](https://github.com/anfixit/router-provisioner/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![OpenWrt](https://img.shields.io/badge/OpenWrt-24.10%2B-00B5E2.svg)](https://openwrt.org/)
-[![Shell: POSIX](https://img.shields.io/badge/shell-POSIX%20sh-89e051.svg)](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html)
-
-[Быстрый старт](#быстрый-старт) ·
-[Что делает](#что-делает-скрипт) ·
-[Конфигурация](#итоговая-конфигурация) ·
-[Диагностика](#диагностика-и-восстановление) ·
-[Разработка](#разработка)
 
 </div>
 
-> **English:** Router Provisioner is an interactive POSIX-shell provisioner for
-> OpenWrt 24.10+. It installs the latest NetShift, sing-box extended and
-> youtubeUnblock, wires up subscription-based proxying with a Russia-direct
-> exclusion route, and installs a guarded boot service that fails open instead
-> of leaving the router without DNS. Documentation is in Russian; the code and
-> the audit notes in [`docs/AUDIT.md`](docs/AUDIT.md) are the reference.
-
 ---
 
-## Содержание
-
-- [Зачем это нужно](#зачем-это-нужно)
-- [Требования](#требования)
-- [Быстрый старт](#быстрый-старт)
-- [Режимы запуска](#режимы-запуска)
-- [Что делает скрипт](#что-делает-скрипт)
-- [Чего скрипт не делает](#чего-скрипт-не-делает)
-- [Архитектура](#архитектура)
-- [Итоговая конфигурация](#итоговая-конфигурация)
-- [Холодный старт после reboot](#холодный-старт-после-reboot)
-- [Обновление подписки](#обновление-подписки)
-- [Диагностика и восстановление](#диагностика-и-восстановление)
-- [Разработка](#разработка)
-- [Безопасность](#безопасность)
-- [Участие в проекте](#участие-в-проекте)
-- [Лицензия](#лицензия)
-
----
-
-## Зачем это нужно
-
-Ручная настройка NetShift на OpenWrt — это десяток шагов, где легко ошибиться,
-и один неудачный reboot, после которого роутер остаётся без DNS и без интернета.
-
-Router Provisioner решает три задачи:
-
-| Проблема | Решение |
-|---|---|
-| NetShift стартует раньше, чем поднялся WAN, и уходит в crash loop | Guard-сервис с `START=99`, преflight-проверками и fail-open остановкой |
-| Обновление подписки ломает рабочую конфигурацию | Helper с бэкапом кеша и автоматическим откатом |
-| YouTube не работает даже при рабочем прокси | youtubeUnblock на прямом маршруте + отдельный direct-список доменов |
-
-## Требования
-
-| Компонент | Требование |
-|---|---|
-| OpenWrt | 24.10 или новее |
-| Пользователь | `root` |
-| Терминал | интерактивный SSH с TTY |
-| Пакетный менеджер | `apk` или `opkg` |
-| Свободный overlay | не менее 25 MiB |
-| RAM | не менее 64 MiB |
-| Интернет | рабочий WAN на самом роутере |
-| Подписка | одна или несколько HTTPS-ссылок |
-
-## Быстрый старт
+## Установка
 
 Зайдите на роутер по SSH под `root` и выполните одну команду:
 
@@ -83,392 +23,256 @@ Router Provisioner решает три задачи:
 cd /tmp && uclient-fetch -4 -q -O rp.sh https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh && chmod +x rp.sh && ./rp.sh
 ```
 
-Она скачает скрипт в `/tmp` и сразу запустит его. Дальше скрипт сам задаст
-вопросы: hostname, SSH-ключ, Wi-Fi, ссылки подписки. Пароли и ссылки вводятся
-со скрытым эхо.
+Дальше скрипт всё спросит сам. Ничего заранее готовить не нужно.
 
-Хотите сначала посмотреть, что произойдёт, ничего не меняя — допишите
-`--dry-run`:
+---
 
-```sh
-cd /tmp && uclient-fetch -4 -q -O rp.sh https://raw.githubusercontent.com/anfixit/router-provisioner/main/router-provisioner.sh && chmod +x rp.sh && ./rp.sh --dry-run
-```
+## Что он спросит
 
-Скачанный `rp.sh` остаётся в `/tmp`, повторно качать не нужно — запускайте
-`/tmp/rp.sh` с любыми флагами.
+Скрипт идёт по шагам и на каждом ждёт вашего ответа. На любой вопрос можно
+ответить «нет» — шаг просто пропустится.
 
-Если команда завершилась с `Failed to send request: Operation not permitted`
-или другой ошибкой загрузки — см.
-[Роутер не может скачать скрипт](#частые-проблемы).
+### 1. Основное
 
-> [!IMPORTANT]
-> Не запускайте установщик через `curl | sh`. Конвейер забирает стандартный
-> ввод, и скрипт не сможет прочитать ваши ответы. Поэтому в команде выше
-> скачивание и запуск разделены через `&&`, а не через конвейер.
+Имя роутера, пароль `root`, SSH-ключ, имя и пароль Wi-Fi. Всё необязательно:
+не хотите менять — жмите Enter.
 
-## Режимы запуска
+### 2. NetShift и подписка
 
-| Флаг | Действие |
-|---|---|
-| `--diagnose` | Только диагностика устройства, без изменений |
-| `--dry-run` | Показать все действия без изменения системы |
-| `--yes` | Подтверждать обычные вопросы автоматически |
-| `--version` | Показать версию |
-| `--help` | Показать справку |
+Ставится NetShift последней версии и sing-box extended.
 
-`--yes` подтверждает только да/нет-вопросы. Значения и секреты — ссылки подписок,
-пароли, SSH-ключи — всегда вводятся интерактивно.
+Затем скрипт спросит **до двух ссылок подписки**. Ссылки вводятся скрытно, на
+экране не показываются.
 
-Для проверки pull request можно указать ветку:
+> [!TIP]
+> Подписки может не быть — нажмите Enter и пропустите. Всё остальное настроится,
+> а ссылку добавите потом через веб-интерфейс: **LuCI → Services → NetShift →
+> Секции → VPN**. После этого запустите скрипт ещё раз, и он всё достроит.
 
-```sh
-ROUTER_PROVISIONER_REF=my-branch /tmp/router-provisioner.sh
-```
+### 3. YouTube
 
-## Что делает скрипт
+Ставится youtubeUnblock. YouTube пускается **мимо** VPN — идёт на полной
+скорости провайдера, а блокировку снимает youtubeUnblock. Так видео не съедает
+полосу подписки.
 
-**Диагностика**
+### 4. Блокировка рекламы
 
-- определяет модель, board, target, архитектуру и версию OpenWrt;
-- проверяет свободный overlay и RAM;
-- создаёт backup через `sysupgrade -b`.
+Скрипт предложит включить AdGuard DNS. Есть личный кабинет AdGuard — введите
+свой адрес, он тоже вводится скрытно. Нет — будет использован публичный
+`AdGuard Default`, который режет рекламу и трекеры.
 
-**Базовая настройка (по выбору)**
-
-- hostname и пароль `root`;
-- публичный SSH-ключ, порт Dropbear и ограничение интерфейсом LAN;
-- SSID и пароль существующих Wi-Fi AP-секций.
-
-**NetShift**
-
-- сравнивает установленную версию с последним релизом и обновляет при отставании;
-- устанавливает и проверяет `sing-box extended`;
-- принимает одну или несколько HTTPS-ссылок подписки;
-- включает глобальный прокси и URLTest;
-- направляет `russia_outside`, `.ru`, `.su` и локальную сеть напрямую.
-
-**youtubeUnblock**
-
-- ставит последний релиз под архитектуру роутера и формат пакета (`apk`/`ipk`);
-- ставит `luci-app-youtubeUnblock` и модули ядра для nfqueue;
-- настраивает DPI-обход для YouTube и доменов Google;
-- создаёт прямой список YouTube-доменов, исключённый из прокси.
-
-**Устойчивость**
-
-- отключает штатный автозапуск NetShift и ставит guard-сервис;
-- ставит helper обновления подписки с откатом и cron-задание.
-
-## Чего скрипт не делает
-
-Он не прошивает заводскую систему и не изменяет:
-
-- U-Boot и загрузчик;
-- MTD, UBI и внутреннюю GPT-разметку;
-- `fw_env`;
-- аппаратные radio-секции;
-- конфигурацию другого маршрутизатора.
-
-## Архитектура
-
-```text
-router-provisioner.sh      безопасный загрузчик, скачивает модули по версии
-├── lib/common.sh          ввод, логирование, GitHub-релизы, общие функции
-├── lib/system.sh          диагностика и базовая настройка OpenWrt
-├── lib/netshift.sh        NetShift, подписки, маршрутизация
-├── lib/youtubeunblock.sh  youtubeUnblock: установка и настройка
-├── lib/lifecycle.sh       guard-сервис и helper обновления
-├── lib/main.sh            порядок выполнения
-└── runtime/               helper-скрипты, устанавливаемые на роутер
-```
-
-Загрузчик скачивает модули во временный каталог и запускает их через `exec`,
-не расходуя стандартный ввод. Это позволяет обновлять логику независимо от
-уже скачанного `router-provisioner.sh`.
-
-Разбор инцидента, из-за которого появился guard-сервис, — в
-[`docs/AUDIT.md`](docs/AUDIT.md).
-
-## Итоговая конфигурация
-
-### NetShift
-
-| Параметр | Значение |
-|---|---|
-| DNS | DoH через `dns.adguard-dns.com` |
-| Bootstrap DNS | `77.88.8.8` |
-| Источник трафика | `br-lan` |
-| IPv6 | выключен |
-| Обновление списков | раз в сутки |
-| Уровень журнала | `warn` |
-
-Секция `VPN` — прокси по подписке, формат `xray`, URLTest каждые 3 минуты по
-`https://www.gstatic.com/generate_204`, глобальный прокси включён.
-
-Секция `RU_DIRECT` — исключение из прокси: список `russia_outside`, домены `.ru`
-и `.su`, и локальный список YouTube-доменов
-`/etc/netshift/rulesets/youtube-direct.lst`.
+Фильтрация работает сразу для **всех** устройств в доме, настраивать телефоны
+и телевизоры по отдельности не нужно.
 
 > [!NOTE]
-> Штатное автообновление подписки NetShift выключено намеренно
-> (`subscription_update_interval=disabled`). Его заменяет
-> `router-provisioner-netshift-refresh`, который умеет откатываться. Оба
-> механизма одновременно конфликтовали бы за один и тот же кеш.
+> Реклама **внутри видео** — преролы в YouTube, VK Video, Rutube — через DNS не
+> блокируется ничем. Она идёт с тех же адресов, что и само видео. Нужен
+> блокировщик в браузере или приложении.
 
-### youtubeUnblock
+---
 
-| Параметр | Значение |
-|---|---|
-| nfqueue | `537` |
-| Packet mark | `32768` |
-| Стратегия | `pastseq`, фрагментация TCP, `sni_detection=parse` |
-| QUIC | `udp_mode=drop`, `udp_filter_quic=parse` |
-
-Обрабатываемые SNI: `googlevideo.com`, `ggpht.com`, `ytimg.com`, `youtube.com`,
-`play.google.com`, `youtu.be`, `googleapis.com`, `googleusercontent.com`,
-`gstatic.com`, `l.google.com`.
-
-YouTube идёт **мимо прокси**, а youtubeUnblock чинит TLS-handshake на прямом
-маршруте. Поэтому direct-список доменов и список SNI должны совпадать.
-
-## Холодный старт после reboot
-
-Обычный автозапуск NetShift отключается. Вместо него включается
-`/etc/init.d/router-provisioner-netshift` с `START=99`, который запускает
-`/usr/bin/router-provisioner-netshift-start`:
-
-1. ждёт рабочий WAN и default route (до 120 секунд);
-2. проверяет прямую загрузку `russia_outside.srs`;
-3. обновляет списки при остановленном NetShift;
-4. запускает NetShift;
-5. проверяет процесс sing-box, валидность JSON и FakeIP;
-6. допускает ровно одну повторную попытку;
-7. при повторной неудаче **останавливает NetShift**, возвращая обычные DNS и
-   маршрутизацию.
-
-Последний шаг важен: лучше роутер без прокси, чем роутер без интернета.
-
-Проверить guard:
-
-```sh
-/etc/init.d/router-provisioner-netshift enabled && echo enabled
-logread -e router-provisioner-boot
-```
-
-## Обновление подписки
-
-> [!WARNING]
-> Не запускайте `netshift subscription_update` вручную — при неудаче он оставит
-> нерабочую конфигурацию.
-
-```sh
-/usr/bin/router-provisioner-netshift-refresh
-```
-
-Helper сохраняет текущий кеш подписок и рабочий `config.json`. Если после
-обновления sing-box и FakeIP не поднимаются, предыдущие файлы восстанавливаются.
-
-Автоматически запускается каждый час в 17 минут через root-crontab.
-
-## Диагностика и восстановление
-
-### Проверка после установки
+## Проверить, что всё работает
 
 ```sh
 netshift global_check
-/etc/init.d/youtubeUnblock status
-pgrep -af 'netshift|sing-box|youtubeUnblock'
+```
+
+Ожидается: sing-box запущен, DNS на роутере, FakeIP из диапазона `198.18.0.0/15`.
+
+Реклама:
+
+```sh
+nslookup doubleclick.net 127.0.0.1
+```
+
+Заблокированный домен вернёт `0.0.0.0`.
+
+После перезагрузки:
+
+```sh
 logread -e router-provisioner-boot
 ```
 
-Ожидается:
+Ожидается `uplink device is ...` и `NetShift is ready`.
 
-- процесс sing-box запущен и слушает порты;
-- DNS отвечает на роутере;
-- FakeIP из диапазона `198.18.0.0/15`;
-- активные NFT counters;
-- отсутствие новых `FATAL`, `closed pipe` и crash loop.
+---
 
-### Аварийное восстановление интернета
-
-```sh
-/etc/init.d/router-provisioner-netshift stop
-/etc/init.d/netshift stop
-/etc/init.d/dnsmasq restart
-```
-
-Затем проверьте:
-
-```sh
-ip route show default
-nslookup openwrt.org
-```
-
-### Частые проблемы
+## Если что-то пошло не так
 
 <details>
 <summary><b>Роутер не может скачать скрипт</b></summary>
 
-Типичная ошибка:
+Ошибка `Failed to send request: Operation not permitted` означает, что запрос не
+ушёл. Три причины по убыванию частоты.
 
-```text
-Failed to send request: Operation not permitted
-```
+**Нет IPv6-маршрута.** Команда установки уже использует `-4`, но если вы качали
+иначе — добавьте этот флаг.
 
-`Operation not permitted` приходит от `uclient-fetch` на этапе установки
-соединения — запрос не ушёл вообще. Скрипт тут ни при чём, проблема на уровне
-сети роутера. Три причины по убыванию частоты.
-
-**1. Нет рабочего IPv6-маршрута.** Имя резолвится в AAAA, клиент идёт по IPv6,
-ядро возвращает `EPERM`. Проверка:
+**Совпали подсети.** Если роутер подключён к другому роутеру, а у обоих сеть
+`192.168.1.0/24` — исходящие соединения не устанавливаются. Смените сеть своего:
 
 ```sh
-uclient-fetch -4 -q -O /tmp/test.bin https://raw.githubusercontent.com/anfixit/router-provisioner/main/VERSION
+uci set network.lan.ipaddr=192.168.10.1 && uci commit network && /etc/init.d/network restart
 ```
 
-Если с `-4` работает — причина в этом. Блок из шага 1 уже пробует `-4` первым.
+Зайти после этого нужно уже по новому адресу.
 
-**2. DNS завёрнут на неработающий резолвер.** Признак — `nslookup` не отвечает
-или отдаёт `127.0.0.42`. Это FakeIP-резолвер NetShift при остановленном
-sing-box, тот самый сценарий из [`docs/AUDIT.md`](docs/AUDIT.md):
+**DNS завёрнут на неработающий резолвер.** Признак — `nslookup` молчит или
+отдаёт `127.0.0.42`:
 
 ```sh
-/etc/init.d/netshift stop
+/etc/init.d/netshift stop && /etc/init.d/dnsmasq restart
 ```
-
-```sh
-/etc/init.d/dnsmasq restart
-```
-
-**3. WAN не поднят.** Проверка:
-
-```sh
-ip route show default
-```
-
-Пусто — значит, до настройки прокси дело не дошло, разбирайтесь с WAN.
-
-Общая диагностика, если ни одно не подошло:
-
-```sh
-ping -4 -c 3 1.1.1.1
-```
-
-```sh
-nft list ruleset | head -60
-```
-
-Пинг идёт, а имена не резолвятся — чисто DNS. Видны цепочки netshift или
-tproxy при остановленном сервисе — остались правила от упавшего запуска,
-лечится `/etc/init.d/firewall restart`.
 
 </details>
 
 <details>
-<summary><b>«За 120 секунд не появился default-маршрут»</b></summary>
+<summary><b>Пропал интернет</b></summary>
 
-Скрипт ждёт не интерфейс с именем `wan`, а любой интерфейс, который держит
-default-маршрут — подойдут кабельный WAN, PPPoE, `wwan` и Wi-Fi-клиент.
-Сообщение означает, что маршрута нет вообще:
+```sh
+/etc/init.d/router-provisioner-netshift stop && /etc/init.d/netshift stop && /etc/init.d/dnsmasq restart
+```
+
+Интернет вернётся без VPN. Дальше смотрите `logread -e router-provisioner-boot`.
+
+</details>
+
+<details>
+<summary><b>«За 240 секунд не появился аплинк»</b></summary>
+
+Скрипт ждёт не интерфейс с именем `wan`, а любой, через который реально
+скачивается файл — подойдёт кабель, PPPoE, 4G-модем или Wi-Fi-клиент. Сообщение
+значит, что интернета на роутере нет вовсе:
 
 ```sh
 ip route show default
 ```
 
-Пусто — разбирайтесь с аплинком, к NetShift это отношения не имеет. Строка
-вида `default via ... dev ...` есть, а ошибка всё равно появляется — пришлите
-вывод в issue.
+Пусто — разбирайтесь с подключением, к скрипту это отношения не имеет.
 
-Определённый аплинк печатается в блоке диагностики при каждом запуске, строка
-`Аплинк:`. Быстрая проверка без установки:
+</details>
+
+<details>
+<summary><b>NetShift не запускается после перезагрузки</b></summary>
+
+Чаще всего подписка не задана — тогда так и задумано. Проверьте:
+
+```sh
+uci get netshift.VPN.subscription_url
+```
+
+Пусто — добавьте ссылку в LuCI и запустите скрипт повторно.
+
+</details>
+
+<details>
+<summary><b>Реклама всё равно показывается</b></summary>
+
+Проверьте, что фильтрация дошла до устройства:
+
+```sh
+nslookup doubleclick.net 127.0.0.1
+```
+
+Не `0.0.0.0` — AdGuard не подключился. Вернулся `0.0.0.0`, а реклама есть —
+устройство ходит мимо роутера. Обычно это включённый на нём VPN или собственный
+DNS в настройках.
+
+Реклама внутри видео не блокируется, см. выше.
+
+</details>
+
+<details>
+<summary><b>Пропал доступ по SSH</b></summary>
+
+Dropbear намеренно не перезапускается сам. Не закрывайте текущую сессию:
+перезапустите его вручную, проверьте вход во втором терминале и только потом
+закрывайте старый.
+
+</details>
+
+---
+
+## Полезно знать
+
+**Резервная копия** создаётся до всех изменений в `/tmp`. Скопируйте её на
+компьютер до перезагрузки — `/tmp` при ней очищается:
+
+```sh
+scp root@192.168.1.1:/tmp/router-provisioner-*.tar.gz ~/
+```
+
+**Скрипт можно запускать сколько угодно раз.** Уже установленное он пропустит,
+недостающее доставит.
+
+**Посмотреть, что произойдёт, ничего не меняя:**
+
+```sh
+/tmp/rp.sh --dry-run
+```
+
+**Только диагностика, без установки:**
 
 ```sh
 /tmp/rp.sh --diagnose
 ```
 
-</details>
+---
 
-<details>
-<summary><b>Официальный установщик NetShift задаёт вопросы</b></summary>
+## Требования
 
-Так и должно быть. Он предложит удалить конфликтующий `https-dns-proxy` и,
-для версий ниже 0.8.0, сбросить конфигурацию. Отвечайте осознанно: при отказе
-от удаления `https-dns-proxy` установщик завершится с ошибкой.
+| Что | Сколько |
+|---|---|
+| OpenWrt | 24.10 или новее |
+| Свободное место | от 25 МБ |
+| Оперативная память | от 64 МБ |
+| Доступ | `root` по SSH |
+| Интернет | должен работать на самом роутере |
 
-</details>
+---
 
-<details>
-<summary><b>Нет сборки youtubeUnblock для моей архитектуры</b></summary>
+## Как это устроено
 
-Скрипт подбирает ассет по `DISTRIB_ARCH` из `/etc/openwrt_release`. Проверьте,
-что для вашей архитектуры есть файл в
-[релизах youtubeUnblock](https://github.com/Waujito/youtubeUnblock/releases).
-Для экзотических платформ есть только static-сборки, которые ставятся вручную.
-
-</details>
-
-<details>
-<summary><b>После установки пропал доступ по SSH</b></summary>
-
-Dropbear намеренно **не перезапускается** автоматически. Не закрывайте текущую
-сессию: перезапустите Dropbear вручную, проверьте вход во втором терминале и
-только после успешной проверки закройте старый терминал.
-
-</details>
-
-<details>
-<summary><b>Backup исчез после перезагрузки</b></summary>
-
-Backup создаётся в `/tmp/router-provisioner-YYYYMMDD-HHMMSS.tar.gz`, а `/tmp`
-на OpenWrt — это tmpfs. Копируйте архив на компьютер сразу, до reboot.
-
-</details>
-
-## Разработка
-
-```sh
-sh -n router-provisioner.sh lib/*.sh runtime/*
-dash -n router-provisioner.sh lib/*.sh runtime/*
-busybox ash -n router-provisioner.sh lib/*.sh runtime/*
-shellcheck -x -e SC1090,SC2034,SC2317,SC2329 \
-    router-provisioner.sh lib/*.sh runtime/* tests/*.sh
-dash tests/test_router_provisioner.sh
-busybox ash tests/test_router_provisioner.sh
+```text
+router-provisioner.sh      загрузчик, качает модули
+├── lib/common.sh          ввод, логирование, работа с релизами
+├── lib/system.sh          диагностика и базовая настройка
+├── lib/netshift.sh        NetShift, подписки, маршруты
+├── lib/youtubeunblock.sh  обход блокировки YouTube
+├── lib/adblock.sh         AdGuard DNS
+├── lib/lifecycle.sh       автозапуск и обновление подписки
+└── runtime/               то, что устанавливается на роутер
 ```
 
-Тот же набор проверок выполняет CI на каждый push и pull request.
+Обычный автозапуск NetShift отключается. Вместо него ставится сторожевой сервис,
+который ждёт реального интернета, запускает NetShift, проверяет его и **при
+неудаче останавливает**. Лучше роутер без VPN, чем роутер без интернета.
 
-Код на POSIX `sh`: без bash-измов, с проверкой в `dash` и BusyBox `ash`, потому
-что на роутере выполняется именно BusyBox.
+Подписка обновляется ежечасно с автоматическим откатом: если после обновления
+sing-box не поднимается, возвращается предыдущая рабочая конфигурация.
+
+Подробный разбор аварии, из-за которой это появилось, — в [docs/AUDIT.md](docs/AUDIT.md).
+
+---
 
 ## Безопасность
 
-Никогда не публикуйте:
+Никому не отправляйте ссылки подписок, пароли и файлы резервных копий — в
+последних лежат пароли Wi-Fi и провайдера. Скрипт скрывает ввод секретов и не
+печатает их даже в `--dry-run`.
 
-- ссылки подписок, UUID и токены;
-- приватные ключи и пароли;
-- `/etc/shadow`;
-- полные backup-архивы — в них есть учётные данные PPPoE и Wi-Fi.
+Уязвимости — [SECURITY.md](SECURITY.md).
 
-Скрипт скрывает ввод подписок и паролей и не печатает их в `--dry-run`. В CI
-работает регрессионный поиск секретов.
+---
 
-Об уязвимостях — [`SECURITY.md`](SECURITY.md).
+## Участие
 
-## Участие в проекте
+[CONTRIBUTING.md](CONTRIBUTING.md) · [CHANGELOG.md](CHANGELOG.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
-Pull request'ы приветствуются. Перед отправкой прочитайте
-[`CONTRIBUTING.md`](CONTRIBUTING.md) и убедитесь, что локальные проверки
-проходят. Правила общения — [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
-
-История изменений — [`CHANGELOG.md`](CHANGELOG.md).
-
-## Благодарности
-
-- [NetShift](https://github.com/yandexru45/netshift) — маршрутизация и sing-box
-- [youtubeUnblock](https://github.com/Waujito/youtubeUnblock) — DPI-обход
-- [allow-domains](https://github.com/itdoginfo/allow-domains) — списки доменов
+Спасибо проектам [NetShift](https://github.com/yandexru45/netshift),
+[youtubeUnblock](https://github.com/Waujito/youtubeUnblock) и
+[allow-domains](https://github.com/itdoginfo/allow-domains).
 
 ## Лицензия
 
-[Apache License 2.0](LICENSE).
+[Apache License 2.0](LICENSE)

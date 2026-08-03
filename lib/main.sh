@@ -17,6 +17,8 @@ RUNTIME_DIR=${ROUTER_PROVISIONER_RUNTIME_DIR:-}
 . "$RUNTIME_DIR/netshift.sh"
 # shellcheck source=lib/youtubeunblock.sh
 . "$RUNTIME_DIR/youtubeunblock.sh"
+# shellcheck source=lib/adblock.sh
+. "$RUNTIME_DIR/adblock.sh"
 # shellcheck source=lib/lifecycle.sh
 . "$RUNTIME_DIR/lifecycle.sh"
 
@@ -35,6 +37,13 @@ EOF_USAGE
 print_final_report() {
     printf '\n=== Готово ===\n'
     [ -n "$CONFIG_BACKUP" ] && printf 'Backup: %s\n' "$CONFIG_BACKUP"
+
+    if [ "$SUBSCRIPTION_COUNT" -eq 0 ]; then
+        printf '\nПодписка не задана. NetShift настроен, но остановлен.\n'
+        printf 'Добавьте ссылку: LuCI -> Services -> NetShift -> Секции -> VPN,\n'
+        printf 'затем запустите этот скрипт повторно.\n\n'
+    fi
+
     printf 'Проверка NetShift: netshift global_check\n'
     printf 'Проверка youtubeUnblock: %s status\n' "$YOUTUBEUNBLOCK_SERVICE"
     printf 'Журнал старта: logread -e router-provisioner-boot\n'
@@ -66,6 +75,7 @@ main() {
     install_youtubeunblock
     configure_youtubeunblock
     start_youtubeunblock
+    configure_adblock
     install_lifecycle_helpers
     start_and_validate_netshift
     print_final_report

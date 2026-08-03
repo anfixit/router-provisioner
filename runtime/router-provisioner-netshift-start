@@ -5,8 +5,9 @@ TAG='router-provisioner-boot'
 RULESET_URL='https://github.com/itdoginfo/allow-domains/releases/latest/download/russia_outside.srs'
 LOCK='/tmp/router-provisioner-netshift-start.lock'
 PREFLIGHT='/tmp/russia_outside.preflight.srs'
-MAX_WAN_WAIT=120
+MAX_WAN_WAIT=240
 MAX_READY_ATTEMPTS=45
+PROBE_DOMAINS='discord.com x.com web.telegram.org rutracker.org instagram.com youtube.com'
 
 log() {
     logger -t "$TAG" "$*"
@@ -24,22 +25,41 @@ mkdir "$LOCK" 2>/dev/null || {
     exit 0
 }
 
-# Wait for a default route rather than an interface literally named "wan":
-# the uplink may be a Wi-Fi client, wwan or pppoe. The ruleset preflight
-# download right after this proves the link actually carries traffic.
-wait_for_wan() {
+# No subscription means no proxy outbound. Starting NetShift would repoint
+# dnsmasq at a resolver that answers nothing and take the LAN offline, so wait
+# for the user to add a subscription in LuCI instead.
+if ! uci -q get netshift.VPN.subscription_url >/dev/null 2>&1; then
+    log 'no subscription configured; leaving NetShift stopped'
+    exit 0
+fi
+
+# The uplink may be a Wi-Fi client, wwan or pppoe, so never assume an
+# interface named "wan". A default route alone proves nothing either: early in
+# boot it can point at the LAN bridge before the real uplink is configured.
+# Readiness therefore means the ruleset actually downloads, which proves route,
+# DNS and reachability at once.
+wait_for_uplink() {
     elapsed=0
+    reported=''
 
     while [ "$elapsed" -lt "$MAX_WAN_WAIT" ]; do
         device=$(ip route show default 2>/dev/null | \
             awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
+
         if [ -n "$device" ]; then
-            log "uplink device is $device"
-            return 0
+            if [ "$device" != "$reported" ]; then
+                log "default route is via $device, verifying reachability"
+                reported=$device
+            fi
+
+            if download_ruleset_preflight; then
+                log "uplink device is $device"
+                return 0
+            fi
         fi
 
-        sleep 2
-        elapsed=$((elapsed + 2))
+        sleep 5
+        elapsed=$((elapsed + 5))
     done
 
     return 1
@@ -59,13 +79,27 @@ download_ruleset_preflight() {
     [ -s "$PREFLIGHT" ]
 }
 
+# www.gstatic.com is the urltest_testing_url, and NetShift deliberately keeps
+# that domain on the direct path so the health check measures real latency.
+# It therefore never returns a FakeIP. Probe several proxied domains instead
+# and accept the first FakeIP answer.
+fakeip_ready() {
+    for domain in $PROBE_DOMAINS; do
+        if nslookup "$domain" 127.0.0.42 2>/dev/null | \
+            grep -Eq '198\.18\.'; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 service_ready() {
     pgrep -f '[s]ing-box run' >/dev/null 2>&1 || return 1
     [ -s /etc/sing-box/config.json ] || return 1
     /usr/bin/sing-box check -c /etc/sing-box/config.json \
         >/dev/null 2>&1 || return 1
-    nslookup www.gstatic.com 127.0.0.42 2>/dev/null | \
-        grep -Eq '198\.18\.'
+    fakeip_ready
 }
 
 wait_for_service() {
@@ -98,14 +132,8 @@ attempt_start() {
     wait_for_service
 }
 
-if ! wait_for_wan; then
-    log 'no default route after 120 seconds; uplink is not ready'
-    /etc/init.d/netshift stop >/dev/null 2>&1 || true
-    exit 1
-fi
-
-if ! download_ruleset_preflight; then
-    log 'direct ruleset preflight failed'
+if ! wait_for_uplink; then
+    log 'uplink not usable after 240 seconds; ruleset preflight never succeeded'
     /etc/init.d/netshift stop >/dev/null 2>&1 || true
     exit 1
 fi

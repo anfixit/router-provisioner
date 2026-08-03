@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.1.2'
+VERSION='2.2.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -69,6 +69,8 @@ CONFIG_BACKUP=''
 . "$PROJECT_DIR/lib/netshift.sh"
 # shellcheck source=../lib/youtubeunblock.sh
 . "$PROJECT_DIR/lib/youtubeunblock.sh"
+# shellcheck source=../lib/adblock.sh
+. "$PROJECT_DIR/lib/adblock.sh"
 # shellcheck source=../lib/lifecycle.sh
 . "$PROJECT_DIR/lib/lifecycle.sh"
 
@@ -217,10 +219,14 @@ test_guarded_boot_contract() {
     source=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
     lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
 
-    assert_contains "$source" 'no default route after 120 seconds' \
+    assert_contains "$source" 'ruleset preflight never succeeded' \
         'uplink readiness timeout is missing'
     assert_not_contains "$source" 'network.interface.wan' \
         'the uplink must not be hardcoded to an interface named wan'
+    # A default route can point at the LAN bridge seconds into boot, so
+    # readiness must be proven by an actual download, not by the route alone.
+    assert_contains "$source" 'verifying reachability' \
+        'a bare default route must not be trusted as a ready uplink'
     assert_contains "$source" 'russia_outside.preflight.srs' \
         'remote ruleset preflight is missing'
     assert_contains "$source" '/usr/bin/netshift list_update' \
@@ -393,6 +399,95 @@ test_netshift_settings_match_reference() {
     rm -rf "$fixture"
 }
 
+test_subscription_is_optional() {
+    fixture=$(mktemp -d)
+    TMP_DIR=$fixture
+    ASSUME_YES=0
+
+    # Redirect from a file rather than a pipe: a pipe would run the function
+    # in a subshell and SUBSCRIPTION_COUNT would never reach this scope.
+    printf '\n' > "$fixture/empty"
+    read_subscriptions > "$fixture/out" 2>&1 < "$fixture/empty"
+    output=$(cat "$fixture/out")
+
+    assert_equal '0' "$SUBSCRIPTION_COUNT" \
+        'an empty answer must leave no subscriptions'
+    assert_contains "$output" 'NetShift настроен, но запускаться не будет' \
+        'the user must be told NetShift stays stopped'
+    assert_contains "$output" 'LuCI' \
+        'the user must be told where to add the subscription later'
+
+    printf 'https://example.test/a\nhttps://example.test/b\n' > "$fixture/two"
+    read_subscriptions > "$fixture/out" 2>&1 < "$fixture/two"
+    output=$(cat "$fixture/out")
+
+    assert_equal '2' "$SUBSCRIPTION_COUNT" \
+        'two subscriptions must be accepted'
+    assert_not_contains "$output" 'example.test' \
+        'subscription URLs must never be echoed'
+
+    SUBSCRIPTION_COUNT=0
+    SUBSCRIPTIONS=''
+    TMP_DIR=''
+    rm -rf "$fixture"
+}
+
+test_netshift_stays_stopped_without_subscription() {
+    lifecycle=$(cat "$PROJECT_DIR/lib/netshift.sh")
+    boot=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
+
+    assert_contains "$lifecycle" 'Подписки нет, NetShift не запускается.' \
+        'the installer must refuse to start NetShift without a subscription'
+    assert_contains "$boot" 'no subscription configured' \
+        'the boot guard must refuse to start NetShift without a subscription'
+    assert_contains "$boot" 'netshift.VPN.subscription_url' \
+        'the boot guard must read the subscription from UCI'
+}
+
+test_boot_guard_is_not_respawned() {
+    lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
+
+    assert_not_contains "$lifecycle" 'procd_set_param respawn' \
+        'respawn restarts the one-shot helper forever and flaps NetShift'
+    assert_contains "$lifecycle" 'One-shot boot task' \
+        'the reason respawn is absent must stay documented'
+}
+
+test_adblock_defaults_to_adguard() {
+    fixture=$(mktemp -d)
+    TMP_DIR=$fixture
+    DRY_RUN=1
+    ASSUME_YES=1
+
+    uci() {
+        return 0
+    }
+
+    output=$(configure_adblock 2>&1)
+
+    assert_contains "$output" 'netshift.settings.dns_type=doh' \
+        'ad blocking must switch the upstream resolver to DoH'
+    assert_contains "$output" '[REDACTED]' \
+        'the resolver address must not be echoed'
+    assert_contains "$output" 'через DNS не блокируется' \
+        'in-stream video ads must be called out as not blocked'
+
+    assert_true 'a personal AdGuard endpoint must be accepted' \
+        valid_doh_url 'https://d.adguard-dns.com/dns-query/abc123'
+    assert_true 'the public AdGuard endpoint must be accepted' \
+        valid_doh_url "$ADGUARD_DEFAULT_DOH"
+    assert_false 'a bare hostname must be rejected' \
+        valid_doh_url 'dns.adguard-dns.com'
+    assert_false 'a bootstrap IP must be rejected' \
+        valid_doh_url '94.140.14.49'
+
+    unset -f uci 2>/dev/null || true
+    DRY_RUN=0
+    ASSUME_YES=0
+    TMP_DIR=''
+    rm -rf "$fixture"
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -421,5 +516,9 @@ test_github_asset_selection
 test_youtubeunblock_matches_reference
 test_netshift_settings_match_reference
 test_youtubeunblock_is_wired_in
+test_subscription_is_optional
+test_netshift_stays_stopped_without_subscription
+test_boot_guard_is_not_respawned
+test_adblock_defaults_to_adguard
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-03
+
+### Added
+
+- Шаг блокировки рекламы (`lib/adblock.sh`): AdGuard DNS как вышестоящий резолвер NetShift, персональный адрес или публичный `AdGuard Default`. Фильтрация работает для всех устройств сети сразу.
+- Подписка стала необязательной: скрипт настраивает всё остальное, ссылку можно добавить позже в LuCI и запустить скрипт повторно.
+- Community-список `youtube` в секции прямого маршрута рядом с локальным, чтобы YouTube оставался на прямом пути под youtubeUnblock.
+
+### Fixed
+
+- Убран `procd_set_param respawn` у guard-сервиса. Хелпер — одноразовая загрузочная задача, а procd перезапускал его через 5 секунд после каждого выхода; каждый прогон останавливал и запускал NetShift. Это была основная причина постоянных обрывов связи.
+- Проверка готовности больше не опрашивает `www.gstatic.com`. Этот домен задан как `urltest_testing_url`, NetShift держит его на прямом маршруте, и FakeIP он не получает никогда — из-за чего guard не признавал сервис поднявшимся ни разу.
+- Готовность аплинка определяется по фактической загрузке ruleset, а не по наличию default-маршрута: в первые секунды загрузки маршрут может указывать на `br-lan`, и старая проверка ему верила.
+- NetShift не запускается без подписки — иначе dnsmasq уезжал на неотвечающий резолвер и сеть ложилась.
+- Устранены два скрытых обрыва: `[ ... ] && break` последней командой цикла и неохранённая подстановка `ask_secret` завершали скрипт молча из-за `set -e`.
+
+### Changed
+
+- README переписан под обычного пользователя: установка одной командой, описание шагов, свёрнутые разборы типовых проблем.
+
 ## [2.1.2] - 2026-07-30
 
 ### Fixed
@@ -119,7 +139,8 @@
 - Диагностический и dry-run режимы.
 - POSIX shell-тесты и GitHub Actions CI.
 
-[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v2.1.2...HEAD
+[Unreleased]: https://github.com/anfixit/router-provisioner/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/anfixit/router-provisioner/compare/v2.1.2...v2.2.0
 [2.1.2]: https://github.com/anfixit/router-provisioner/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/anfixit/router-provisioner/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/anfixit/router-provisioner/compare/v1.2.0...v2.1.0
