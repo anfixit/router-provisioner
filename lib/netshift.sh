@@ -186,16 +186,16 @@ write_youtube_direct_list() {
     fi
 
     mkdir -p "$(dirname "$YOUTUBE_LIST")"
+    # Heavy media only. The direct route exists to keep video off the
+    # subscription, and video is all that is worth the risk: providers block
+    # YouTube's control-plane API hosts far harder than the CDN, and
+    # youtubeUnblock does not always defeat that. A blocked API host loads the
+    # page but never starts playback - the failure that looks like "YouTube is
+    # broken" while every other check passes. Page and API stay on the proxy.
     cat > "$YOUTUBE_LIST" <<'EOF_YOUTUBE'
-youtube.com
-youtu.be
-youtube-nocookie.com
-youtubekids.com
 googlevideo.com
 ytimg.com
 ggpht.com
-youtubei.googleapis.com
-youtubeembeddedplayer.googleapis.com
 yt3.googleusercontent.com
 EOF_YOUTUBE
     chmod 644 "$YOUTUBE_LIST"
@@ -295,12 +295,33 @@ find_exclusion_section() {
     return 1
 }
 
+# The upstream "youtube" community list bundles the control plane with the CDN:
+# its API hosts sit right next to googlevideo.com. Providers block those API
+# hosts much harder, and a blocked API means the page loads while playback never
+# starts. Earlier versions added this list here, so a re-run must take it out.
+drop_youtube_community_list() {
+    section=$1
+
+    uci_list_contains "netshift.$section.community_lists" youtube || return 0
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "Из $section был бы убран community-список youtube."
+        return 0
+    fi
+
+    uci -q del_list "netshift.$section.community_lists=youtube" 2>/dev/null || \
+        return 0
+    warn "Из $section убран community-список youtube: он уводил API YouTube"
+    warn 'на прямой маршрут, где провайдер его блокирует.'
+    CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
+}
+
 configure_direct_section() {
     existing=$(find_exclusion_section || printf '')
 
     if [ -n "$existing" ]; then
         log "Секция прямого маршрута уже есть: $existing. Дополняю, не переписываю."
-        uci_add_list_once "netshift.$existing.community_lists" youtube
+        drop_youtube_community_list "$existing"
         uci_add_list_once "netshift.$existing.local_domain_lists" \
             "$YOUTUBE_LIST"
         return 0
@@ -310,9 +331,6 @@ configure_direct_section() {
     uci_set_required netshift.RU_DIRECT.connection_type exclusion
     uci_set_default netshift.RU_DIRECT.global_proxy 0
     uci_add_list_once netshift.RU_DIRECT.community_lists russia_outside
-    # Upstream-maintained YouTube list, kept alongside the local one so YouTube
-    # stays on the direct path where youtubeUnblock can repair it.
-    uci_add_list_once netshift.RU_DIRECT.community_lists youtube
     uci_set_default netshift.RU_DIRECT.user_domain_list_type text
     direct_domains='.ru
 .su'

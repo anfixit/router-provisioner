@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.3.1'
+VERSION='2.3.2'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -628,6 +628,26 @@ test_pin_helper_contract() {
         'jq regex builtins are unavailable on the router'
 }
 
+test_youtube_direct_list_is_media_only() {
+    netshift=$(cat "$PROJECT_DIR/lib/netshift.sh")
+
+    # Only the heavy CDN belongs on the direct route. The control plane is
+    # blocked far harder, and a blocked API loads the page but never starts
+    # playback - the failure that looks like "YouTube is broken" while every
+    # other check passes.
+    assert_contains "$netshift" 'googlevideo.com' \
+        'the video CDN must stay on the direct route'
+    assert_not_contains "$netshift" 'youtubei.googleapis.com' \
+        'the YouTube API must not be routed directly'
+    assert_not_contains "$netshift" 'youtubeembeddedplayer.googleapis.com' \
+        'no googleapis host may be routed directly'
+    assert_contains "$netshift" 'drop_youtube_community_list' \
+        'the upstream youtube community list must be removed on re-run'
+    assert_not_contains "$netshift" \
+        'uci_add_list_once netshift.RU_DIRECT.community_lists youtube' \
+        'the youtube community list must not be added back'
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -665,5 +685,6 @@ test_configuration_is_reconciled_not_rewritten
 test_declining_a_step_never_aborts_the_run
 test_pinned_sections_are_optional_and_ordered
 test_pin_helper_contract
+test_youtube_direct_list_is_media_only
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"
