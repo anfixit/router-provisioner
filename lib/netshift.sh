@@ -204,12 +204,45 @@ EOF_YOUTUBE
 # Reconciles the NetShift configuration instead of rewriting it. Sections are
 # never deleted, and any value the owner already picked in LuCI is left alone.
 # Only the handful of options the guarded lifecycle depends on are enforced.
+# NetShift ships a placeholder section - "main" out of the box - with
+# proxy_config_type=url and no proxy_string. That combination is fatal: NetShift
+# aborts the whole config generation with "Proxy string is not set", never
+# writes /etc/sing-box/config.json, and sing-box then refuses to start on the
+# package's own default file. Reconciliation otherwise never deletes sections,
+# but an unfinished proxy section is not configuration, it is a trap.
+remove_unconfigured_proxy_sections() {
+    for candidate in $(uci show netshift 2>/dev/null | \
+        sed -n 's/^netshift\.\([^.=]*\)=section$/\1/p'); do
+        [ "$(uci_value "netshift.$candidate.connection_type")" = proxy ] || \
+            continue
+
+        case "$(uci_value "netshift.$candidate.proxy_config_type")" in
+            ''|url) : ;;
+            *) continue ;;
+        esac
+
+        [ -z "$(uci_value "netshift.$candidate.proxy_string")" ] || continue
+
+        if [ "$DRY_RUN" -eq 1 ]; then
+            log "Пустая секция $candidate была бы удалена."
+            continue
+        fi
+
+        uci -q delete "netshift.$candidate" 2>/dev/null || continue
+        warn "Удалена незаполненная секция $candidate: без ссылки прокси"
+        warn 'NetShift отказывается собирать конфигурацию целиком.'
+        CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
+    done
+}
+
 configure_netshift() {
     read_subscriptions
     write_youtube_direct_list
 
     CONFIG_KEPT=0
     CONFIG_CHANGED=0
+
+    remove_unconfigured_proxy_sections
 
     uci_ensure_section netshift.settings settings
     uci_set_default netshift.settings.dns_type doh
@@ -339,6 +372,25 @@ configure_direct_section() {
     uci_add_list_once netshift.RU_DIRECT.local_domain_lists "$YOUTUBE_LIST"
 }
 
+# www.gstatic.com is the urltest_testing_url, and NetShift deliberately keeps
+# that domain on the direct path so the health check measures real latency. It
+# therefore never returns a FakeIP, and probing it made this validation wait out
+# its full timeout on a perfectly healthy router. Probe proxied domains instead
+# and accept the first FakeIP answer.
+FAKEIP_PROBE_DOMAINS='discord.com x.com web.telegram.org rutracker.org
+instagram.com youtube.com'
+
+fakeip_is_ready() {
+    for probe_domain in $FAKEIP_PROBE_DOMAINS; do
+        if nslookup "$probe_domain" 127.0.0.42 2>/dev/null | \
+            grep -Eq '198\.18\.'; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 start_and_validate_netshift() {
     if [ "$DRY_RUN" -eq 1 ]; then
         log 'NetShift не запускался в dry-run.'
@@ -368,8 +420,7 @@ start_and_validate_netshift() {
         if pgrep -f '[s]ing-box run' >/dev/null 2>&1 && \
             /usr/bin/sing-box check -c /etc/sing-box/config.json \
                 >/dev/null 2>&1 && \
-            nslookup www.gstatic.com 127.0.0.42 2>/dev/null | \
-                grep -Eq '198\.18\.'; then
+            fakeip_is_ready; then
             log 'NetShift, sing-box и FakeIP работают.'
             return 0
         fi

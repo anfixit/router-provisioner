@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.3.3'
+VERSION='2.3.4'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -703,6 +703,25 @@ test_youtube_direct_list_is_media_only() {
         'the youtube community list must not be added back'
 }
 
+test_unconfigured_proxy_sections_are_removed() {
+    netshift=$(cat "$PROJECT_DIR/lib/netshift.sh")
+
+    # NetShift ships a "main" placeholder with proxy_config_type=url and no
+    # proxy_string. It aborts the whole config generation on it, so sing-box
+    # never gets a config and refuses to start on the package default.
+    assert_contains "$netshift" 'remove_unconfigured_proxy_sections' \
+        'an unfinished proxy section must be removed before configuring'
+    assert_contains "$netshift" 'proxy_string' \
+        'the placeholder is recognised by its empty proxy string'
+
+    # The installer validation must use the same probe as the boot helper.
+    assert_contains "$netshift" 'fakeip_is_ready' \
+        'validation must probe several proxied domains'
+    assert_not_contains "$netshift" \
+        'nslookup www.gstatic.com 127.0.0.42' \
+        'gstatic never returns a FakeIP and must not be probed'
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -742,5 +761,6 @@ test_pinned_sections_are_optional_and_ordered
 test_pin_helper_contract
 test_youtube_direct_list_is_media_only
 test_uci_helpers_do_not_clobber_caller_variables
+test_unconfigured_proxy_sections_are_removed
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

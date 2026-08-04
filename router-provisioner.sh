@@ -5,7 +5,7 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION='2.3.3'
+VERSION='2.3.4'
 REPOSITORY='anfixit/router-provisioner'
 REF=${ROUTER_PROVISIONER_REF:-main}
 RUNTIME_DIR=''
