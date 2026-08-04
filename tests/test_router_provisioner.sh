@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.3.0'
+VERSION='2.3.1'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -621,8 +621,11 @@ test_pin_helper_contract() {
         'the helper must return to the primary once it recovers'
     assert_contains "$helper" 'both down' \
         'a dead reserve must not be selected'
-    assert_contains "$helper" 'test("-urltest-out$") | not' \
+    assert_contains "$helper" 'endswith("-urltest-out") | not' \
         'a keyword must never resolve to the automatic urltest group'
+    # OpenWrt ships jq without Oniguruma, so any regex builtin fails silently.
+    assert_not_contains "$helper" 'test(' \
+        'jq regex builtins are unavailable on the router'
 }
 
 test_youtubeunblock_is_wired_in() {

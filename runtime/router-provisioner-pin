@@ -76,9 +76,11 @@ resolve_node() {
 
     [ -n "$keyword" ] || return 1
 
+    # endswith, not test: OpenWrt's jq is built without Oniguruma, so every
+    # regex builtin errors out and the whole filter silently yields nothing.
     api_get "$base" "$group" | \
         jq -r --arg kw "$keyword" \
-            '.all[]? | select(test("-urltest-out$") | not) | select(contains($kw))' \
+            '.all[]? | select(endswith("-urltest-out") | not) | select(contains($kw))' \
         2>/dev/null | head -n 1
 }
 
