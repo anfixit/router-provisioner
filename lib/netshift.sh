@@ -60,8 +60,10 @@ install_netshift() {
     fi
 
     installer="$TMP_DIR/netshift-install.sh"
-    fetch_to_file "$NETSHIFT_INSTALLER" "$installer" || \
-        fatal 'Не удалось скачать официальный установщик NetShift.'
+    if ! fetch_to_file "$NETSHIFT_INSTALLER" "$installer"; then
+        warn 'Не удалось скачать официальный установщик NetShift.'
+        return 1
+    fi
 
     if [ "$DRY_RUN" -eq 1 ]; then
         if [ -n "$installed" ]; then
@@ -81,11 +83,14 @@ install_netshift() {
         warn "Обновление не удалось, остаётся установленный NetShift $installed."
         return 0
     else
-        fatal 'Установка NetShift завершилась ошибкой.'
+        warn 'Установка NetShift завершилась ошибкой.'
+        return 1
     fi
 
-    [ -x /usr/bin/netshift ] && [ -x /etc/init.d/netshift ] || \
-        fatal 'NetShift установлен не полностью.'
+    if [ ! -x /usr/bin/netshift ] || [ ! -x /etc/init.d/netshift ]; then
+        warn 'NetShift установлен не полностью.'
+        return 1
+    fi
 
     current=$(netshift_installed_version)
     log "Активная версия NetShift: ${current:-неизвестна}"
@@ -108,12 +113,15 @@ install_extended_sing_box() {
         return 0
     fi
 
-    /usr/bin/netshift component_action sing_box install_extended || \
-        fatal 'NetShift не смог установить sing-box extended.'
+    if ! /usr/bin/netshift component_action sing_box install_extended; then
+        warn 'NetShift не смог установить sing-box extended.'
+        return 1
+    fi
 
-    /usr/bin/sing-box version 2>/dev/null | \
-        head -n 1 | grep -q extended || \
-        fatal 'Активен не sing-box extended.'
+    if ! /usr/bin/sing-box version 2>/dev/null | head -n 1 | grep -q extended; then
+        warn 'Активен не sing-box extended.'
+        return 1
+    fi
 }
 
 # Subscriptions are optional. Everything else is still configured, so the
@@ -193,55 +201,57 @@ EOF_YOUTUBE
     chmod 644 "$YOUTUBE_LIST"
 }
 
+# Reconciles the NetShift configuration instead of rewriting it. Sections are
+# never deleted, and any value the owner already picked in LuCI is left alone.
+# Only the handful of options the guarded lifecycle depends on are enforced.
 configure_netshift() {
     read_subscriptions
     write_youtube_direct_list
 
-    uci_delete netshift.VPN
-    uci_delete netshift.RU_DIRECT
+    CONFIG_KEPT=0
+    CONFIG_CHANGED=0
 
-    run uci set 'netshift.settings=settings'
-    run uci set 'netshift.settings.dns_type=doh'
-    run uci set 'netshift.settings.dns_server=dns.adguard-dns.com'
-    run uci set 'netshift.settings.bootstrap_dns_server=77.88.8.8'
-    run uci set 'netshift.settings.dns_rewrite_ttl=60'
-    run uci set 'netshift.settings.enable_output_network_interface=0'
-    run uci set 'netshift.settings.enable_badwan_interface_monitoring=0'
-    run uci set 'netshift.settings.enable_yacd=0'
-    run uci set 'netshift.settings.disable_quic=0'
-    run uci set 'netshift.settings.update_interval=1d'
-    run uci set 'netshift.settings.download_lists_via_proxy=0'
-    run uci set 'netshift.settings.dont_touch_dhcp=0'
-    run uci set 'netshift.settings.config_path=/etc/sing-box/config.json'
-    run uci set 'netshift.settings.cache_path=/tmp/sing-box/cache.db'
-    run uci set 'netshift.settings.log_level=warn'
-    run uci set 'netshift.settings.exclude_ntp=0'
-    run uci set 'netshift.settings.shutdown_correctly=0'
-    run uci set 'netshift.settings.dns_via_outbound=0'
-    run uci set 'netshift.settings.block_doh=0'
-    run uci set 'netshift.settings.enable_ipv6=0'
-    uci_delete netshift.settings.source_network_interfaces
-    run uci add_list \
-        'netshift.settings.source_network_interfaces=br-lan'
+    uci_ensure_section netshift.settings settings
+    uci_set_default netshift.settings.dns_type doh
+    uci_set_default netshift.settings.dns_server dns.adguard-dns.com
+    uci_set_default netshift.settings.bootstrap_dns_server 77.88.8.8
+    uci_set_default netshift.settings.dns_rewrite_ttl 60
+    uci_set_default netshift.settings.enable_output_network_interface 0
+    uci_set_default netshift.settings.enable_badwan_interface_monitoring 0
+    uci_set_default netshift.settings.enable_yacd 0
+    uci_set_default netshift.settings.disable_quic 0
+    uci_set_default netshift.settings.update_interval 1d
+    uci_set_default netshift.settings.download_lists_via_proxy 0
+    uci_set_default netshift.settings.dont_touch_dhcp 0
+    uci_set_default netshift.settings.log_level warn
+    uci_set_default netshift.settings.exclude_ntp 0
+    uci_set_default netshift.settings.shutdown_correctly 0
+    uci_set_default netshift.settings.dns_via_outbound 0
+    uci_set_default netshift.settings.block_doh 0
+    uci_set_default netshift.settings.enable_ipv6 0
 
-    run uci set 'netshift.VPN=section'
-    run uci set 'netshift.VPN.connection_type=proxy'
-    run uci set 'netshift.VPN.proxy_config_type=subscription'
-    run uci set 'netshift.VPN.subscription_format_preference=xray'
-    run uci set 'netshift.VPN.subscription_insecure=0'
-    run uci set 'netshift.VPN.subscription_group_mode=off'
-    run uci set 'netshift.VPN.subscription_update_interval=disabled'
-    run uci set 'netshift.VPN.urltest_check_interval=3m'
-    run uci set 'netshift.VPN.urltest_tolerance=50'
-    run uci set \
-        'netshift.VPN.urltest_testing_url=https://www.gstatic.com/generate_204'
-    run uci set 'netshift.VPN.enable_udp_over_tcp=0'
-    run uci set 'netshift.VPN.global_proxy=1'
-    run uci set 'netshift.VPN.user_domain_list_type=disabled'
-    run uci set 'netshift.VPN.user_subnet_list_type=disabled'
-    run uci set 'netshift.VPN.mixed_proxy_enabled=0'
-    run uci set 'netshift.VPN.resolve_real_ip_for_routing=0'
-    uci_delete netshift.VPN.subscription_url
+    # The boot guard validates exactly this file, so the path is not a taste.
+    uci_set_required netshift.settings.config_path /etc/sing-box/config.json
+    uci_set_default netshift.settings.cache_path /tmp/sing-box/cache.db
+    uci_add_list_once netshift.settings.source_network_interfaces br-lan
+
+    uci_ensure_section netshift.VPN section
+    uci_set_required netshift.VPN.connection_type proxy
+    uci_set_required netshift.VPN.proxy_config_type subscription
+    uci_set_default netshift.VPN.subscription_format_preference xray
+    uci_set_default netshift.VPN.subscription_insecure 0
+    uci_set_default netshift.VPN.subscription_group_mode off
+    uci_set_default netshift.VPN.subscription_update_interval 6h
+    uci_set_default netshift.VPN.urltest_check_interval 3m
+    uci_set_default netshift.VPN.urltest_tolerance 50
+    uci_set_default netshift.VPN.urltest_testing_url \
+        https://www.gstatic.com/generate_204
+    uci_set_default netshift.VPN.enable_udp_over_tcp 0
+    uci_set_default netshift.VPN.global_proxy 1
+    uci_set_default netshift.VPN.user_domain_list_type disabled
+    uci_set_default netshift.VPN.user_subnet_list_type disabled
+    uci_set_default netshift.VPN.mixed_proxy_enabled 0
+    uci_set_default netshift.VPN.resolve_real_ip_for_routing 0
 
     subscriptions_file="$TMP_DIR/subscriptions"
     printf '%s\n' "$SUBSCRIPTIONS" > "$subscriptions_file"
@@ -249,30 +259,66 @@ configure_netshift() {
         [ -n "$subscription_url" ] || continue
         if [ "$DRY_RUN" -eq 1 ]; then
             log 'Была бы добавлена ссылка подписки [REDACTED].'
+        elif uci_list_contains netshift.VPN.subscription_url \
+            "$subscription_url"; then
+            log 'Такая ссылка подписки уже есть, добавлять не нужно.'
         else
             uci add_list \
                 "netshift.VPN.subscription_url=$subscription_url"
+            CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
         fi
     done < "$subscriptions_file"
     SUBSCRIPTIONS=''
 
-    run uci set 'netshift.RU_DIRECT=section'
-    run uci set 'netshift.RU_DIRECT.connection_type=exclusion'
-    run uci set 'netshift.RU_DIRECT.global_proxy=0'
-    run uci add_list \
-        'netshift.RU_DIRECT.community_lists=russia_outside'
-    # Upstream-maintained YouTube list, kept alongside the local one below so
-    # YouTube stays on the direct path where youtubeUnblock can repair it.
-    run uci add_list 'netshift.RU_DIRECT.community_lists=youtube'
-    run uci set 'netshift.RU_DIRECT.user_domain_list_type=text'
+    configure_direct_section
+    run uci commit netshift
+    report_configuration_diff 'NetShift'
+}
+
+# The owner may have renamed or rebuilt the exclusion section - YT_DIRECT
+# instead of RU_DIRECT, say. Reuse whichever one already keeps YouTube direct
+# rather than creating a second, competing exclusion.
+find_exclusion_section() {
+    for candidate in $(uci show netshift 2>/dev/null | \
+        sed -n 's/^netshift\.\([^.=]*\)=section$/\1/p'); do
+        [ "$(uci_value "netshift.$candidate.connection_type")" = exclusion ] || \
+            continue
+
+        if uci_list_contains "netshift.$candidate.local_domain_lists" \
+            "$YOUTUBE_LIST" || \
+            uci_list_contains "netshift.$candidate.community_lists" youtube; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+configure_direct_section() {
+    existing=$(find_exclusion_section || printf '')
+
+    if [ -n "$existing" ]; then
+        log "Секция прямого маршрута уже есть: $existing. Дополняю, не переписываю."
+        uci_add_list_once "netshift.$existing.community_lists" youtube
+        uci_add_list_once "netshift.$existing.local_domain_lists" \
+            "$YOUTUBE_LIST"
+        return 0
+    fi
+
+    uci_ensure_section netshift.RU_DIRECT section
+    uci_set_required netshift.RU_DIRECT.connection_type exclusion
+    uci_set_default netshift.RU_DIRECT.global_proxy 0
+    uci_add_list_once netshift.RU_DIRECT.community_lists russia_outside
+    # Upstream-maintained YouTube list, kept alongside the local one so YouTube
+    # stays on the direct path where youtubeUnblock can repair it.
+    uci_add_list_once netshift.RU_DIRECT.community_lists youtube
+    uci_set_default netshift.RU_DIRECT.user_domain_list_type text
     direct_domains='.ru
 .su'
-    run uci set \
-        "netshift.RU_DIRECT.user_domains_text=$direct_domains"
-    run uci set 'netshift.RU_DIRECT.user_subnet_list_type=disabled'
-    run uci add_list \
-        "netshift.RU_DIRECT.local_domain_lists=$YOUTUBE_LIST"
-    run uci commit netshift
+    uci_set_default netshift.RU_DIRECT.user_domains_text "$direct_domains"
+    uci_set_default netshift.RU_DIRECT.user_subnet_list_type disabled
+    uci_add_list_once netshift.RU_DIRECT.local_domain_lists "$YOUTUBE_LIST"
 }
 
 start_and_validate_netshift() {

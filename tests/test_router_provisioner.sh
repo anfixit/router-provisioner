@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.2.0'
+VERSION='2.3.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -71,6 +71,8 @@ CONFIG_BACKUP=''
 . "$PROJECT_DIR/lib/youtubeunblock.sh"
 # shellcheck source=../lib/adblock.sh
 . "$PROJECT_DIR/lib/adblock.sh"
+# shellcheck source=../lib/pinning.sh
+. "$PROJECT_DIR/lib/pinning.sh"
 # shellcheck source=../lib/lifecycle.sh
 . "$PROJECT_DIR/lib/lifecycle.sh"
 
@@ -488,6 +490,141 @@ test_adblock_defaults_to_adguard() {
     rm -rf "$fixture"
 }
 
+test_reconciliation_primitives_preserve_user_values() {
+    fixture=$(mktemp -d)
+    UCI_DB="$fixture/db"
+    : > "$UCI_DB"
+    DRY_RUN=0
+
+    # Minimal stateful uci: enough to prove we read before writing.
+    uci() {
+        [ "$1" = '-q' ] && shift
+        action=$1
+        shift
+        case "$action" in
+            get)
+                value=$(sed -n "s|^$1=||p" "$UCI_DB" | head -n 1)
+                [ -n "$value" ] || return 1
+                printf '%s\n' "$value"
+                ;;
+            set|add_list)
+                key=${1%%=*}
+                new=${1#*=}
+                previous=$(sed -n "s|^$key=||p" "$UCI_DB" | head -n 1)
+                grep -v "^$key=" "$UCI_DB" > "$UCI_DB.tmp" 2>/dev/null || true
+                mv "$UCI_DB.tmp" "$UCI_DB"
+                if [ "$action" = add_list ] && [ -n "$previous" ]; then
+                    printf '%s=%s %s\n' "$key" "$previous" "$new" >> "$UCI_DB"
+                else
+                    printf '%s=%s\n' "$key" "$new" >> "$UCI_DB"
+                fi
+                ;;
+            *) return 0 ;;
+        esac
+    }
+
+    # The owner turned the global proxy off by hand; a re-run must not undo it.
+    printf 'netshift.VPN.global_proxy=0\n' > "$UCI_DB"
+    uci_set_default netshift.VPN.global_proxy 1
+    assert_equal '0' "$(uci_value netshift.VPN.global_proxy)" \
+        'an existing user value must survive a re-run'
+
+    uci_set_default netshift.VPN.urltest_tolerance 50
+    assert_equal '50' "$(uci_value netshift.VPN.urltest_tolerance)" \
+        'a missing option must be filled in'
+
+    # Correctness-critical options are repaired even when already set.
+    printf 'netshift.settings.config_path=/wrong/path.json\n' >> "$UCI_DB"
+    uci_set_required netshift.settings.config_path /etc/sing-box/config.json
+    assert_equal '/etc/sing-box/config.json' \
+        "$(uci_value netshift.settings.config_path)" \
+        'a required option must be corrected'
+
+    uci_add_list_once netshift.RU_DIRECT.community_lists youtube
+    uci_add_list_once netshift.RU_DIRECT.community_lists youtube
+    assert_equal 'youtube' \
+        "$(uci_value netshift.RU_DIRECT.community_lists)" \
+        'a list entry must not be added twice'
+
+    unset -f uci 2>/dev/null || true
+    rm -rf "$fixture"
+}
+
+test_configuration_is_reconciled_not_rewritten() {
+    netshift=$(cat "$PROJECT_DIR/lib/netshift.sh")
+    youtubeunblock=$(cat "$PROJECT_DIR/lib/youtubeunblock.sh")
+
+    assert_not_contains "$netshift" 'uci_delete netshift.VPN' \
+        'the VPN section must never be wiped'
+    assert_not_contains "$netshift" 'uci_delete netshift.RU_DIRECT' \
+        'the exclusion section must never be wiped'
+    assert_contains "$netshift" 'find_exclusion_section' \
+        'a renamed exclusion section must be reused, not duplicated'
+    assert_not_contains "$youtubeunblock" 'remove_youtubeunblock_sections' \
+        'the youtubeUnblock section must not be recreated from scratch'
+    assert_contains "$youtubeunblock" 'remove_extra_youtubeunblock_sections' \
+        'only duplicate youtubeUnblock sections may be removed'
+}
+
+test_declining_a_step_never_aborts_the_run() {
+    entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
+    netshift=$(cat "$PROJECT_DIR/lib/netshift.sh")
+    youtubeunblock=$(cat "$PROJECT_DIR/lib/youtubeunblock.sh")
+
+    # Every optional block is gated by a question and returns instead of exiting.
+    assert_contains "$entrypoint" 'Установить и настроить NetShift?' \
+        'NetShift installation must be a question'
+    assert_contains "$entrypoint" 'Установить youtubeUnblock?' \
+        'youtubeUnblock installation must be a question'
+    assert_contains "$entrypoint" 'Установить сторожевой запуск' \
+        'the guarded lifecycle must be a question'
+
+    # A failed component must report and return, never kill the whole run.
+    assert_not_contains "$netshift" "fatal 'Установка NetShift завершилась" \
+        'a failed NetShift install must not abort the run'
+    assert_not_contains "$youtubeunblock" \
+        "fatal 'Установка youtubeUnblock завершилась" \
+        'a failed youtubeUnblock install must not abort the run'
+    assert_contains "$entrypoint" 'зависимые шаги пропускаются' \
+        'skipping dependent steps must be explained'
+}
+
+test_pinned_sections_are_optional_and_ordered() {
+    pinning=$(cat "$PROJECT_DIR/lib/pinning.sh")
+    boot=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
+
+    assert_contains "$pinning" 'Направить отдельные сервисы через фиксированные' \
+        'pinning must be offered, not forced'
+    # NetShift builds rules in section order and the first match wins, so a
+    # pinned section is useless unless it is moved ahead of the broad ones.
+    assert_contains "$pinning" 'uci reorder' \
+        'a pinned section must be moved ahead of the broad sections'
+    assert_contains "$boot" 'router-provisioner-pin' \
+        'boot must restore pinned nodes instead of waiting for cron'
+
+    assert_true 'a plain section name must pass' \
+        section_name_is_valid 'ANTHROPIC'
+    assert_false 'a name with a dot must fail' \
+        section_name_is_valid 'my.section'
+    assert_false 'an empty name must fail' \
+        section_name_is_valid ''
+}
+
+test_pin_helper_contract() {
+    helper=$(cat "$PROJECT_DIR/runtime/router-provisioner-pin")
+
+    assert_contains "$helper" '/etc/router-provisioner/pinned' \
+        'the helper must read its groups from a file, not hardcode them'
+    assert_contains "$helper" 'external_controller' \
+        'the clash api address must come from the generated config'
+    assert_contains "$helper" 'primary is back' \
+        'the helper must return to the primary once it recovers'
+    assert_contains "$helper" 'both down' \
+        'a dead reserve must not be selected'
+    assert_contains "$helper" 'test("-urltest-out$") | not' \
+        'a keyword must never resolve to the automatic urltest group'
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -520,5 +657,10 @@ test_subscription_is_optional
 test_netshift_stays_stopped_without_subscription
 test_boot_guard_is_not_respawned
 test_adblock_defaults_to_adguard
+test_reconciliation_primitives_preserve_user_values
+test_configuration_is_reconciled_not_rewritten
+test_declining_a_step_never_aborts_the_run
+test_pinned_sections_are_optional_and_ordered
+test_pin_helper_contract
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

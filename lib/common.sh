@@ -4,12 +4,14 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION=${ROUTER_PROVISIONER_VERSION:-2.2.0}
+VERSION=${ROUTER_PROVISIONER_VERSION:-2.3.0}
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
 TMP_DIR=''
 CONFIG_BACKUP=''
+NETSHIFT_READY=0
+PINNED_COUNT=0
 
 log() {
     printf '[INFO] %s\n' "$*"
@@ -54,6 +56,89 @@ uci_delete() {
     fi
 
     uci -q delete "$option" 2>/dev/null || true
+}
+
+# Reconciliation primitives. The provisioner is re-run on routers whose owner
+# has already tuned things by hand in LuCI, so it compares before writing and
+# never deletes a section wholesale.
+CONFIG_KEPT=0
+CONFIG_CHANGED=0
+
+uci_value() {
+    uci -q get "$1" 2>/dev/null || printf ''
+}
+
+# Write only when the option has no value yet. Anything the user already chose
+# stays untouched - these are preferences, not correctness requirements.
+uci_set_default() {
+    option=$1
+    value=$2
+
+    if [ -n "$(uci_value "$option")" ]; then
+        CONFIG_KEPT=$((CONFIG_KEPT + 1))
+        return 0
+    fi
+
+    run uci set "$option=$value"
+    CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
+}
+
+# Write whenever the value differs. Reserved for options the guarded lifecycle
+# depends on, where a wrong value breaks the router rather than the taste.
+uci_set_required() {
+    option=$1
+    value=$2
+
+    current=$(uci_value "$option")
+
+    if [ "$current" = "$value" ]; then
+        CONFIG_KEPT=$((CONFIG_KEPT + 1))
+        return 0
+    fi
+
+    [ -n "$current" ] && log "Исправляю $option: '$current' -> '$value'"
+    run uci set "$option=$value"
+    CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
+}
+
+uci_list_contains() {
+    uci -q get "$1" 2>/dev/null | tr ' ' '\n' | grep -Fxq "$2"
+}
+
+uci_add_list_once() {
+    option=$1
+    value=$2
+
+    if uci_list_contains "$option" "$value"; then
+        CONFIG_KEPT=$((CONFIG_KEPT + 1))
+        return 0
+    fi
+
+    run uci add_list "$option=$value"
+    CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
+}
+
+uci_ensure_section() {
+    section=$1
+    type=$2
+
+    if [ -n "$(uci_value "$section")" ]; then
+        CONFIG_KEPT=$((CONFIG_KEPT + 1))
+        return 0
+    fi
+
+    run uci set "$section=$type"
+    CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
+}
+
+report_configuration_diff() {
+    label=$1
+
+    if [ "$CONFIG_CHANGED" -eq 0 ]; then
+        log "$label: всё уже настроено, изменений нет."
+    else
+        log "$label: изменено $CONFIG_CHANGED, оставлено как было $CONFIG_KEPT."
+    fi
 }
 
 ask_yes_no() {

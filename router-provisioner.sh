@@ -5,7 +5,7 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION='2.2.0'
+VERSION='2.3.0'
 REPOSITORY='anfixit/router-provisioner'
 REF=${ROUTER_PROVISIONER_REF:-main}
 RUNTIME_DIR=''
@@ -67,7 +67,7 @@ main() {
         fatal 'Не удалось создать временный каталог.'
 
     for module in \
-        common system netshift youtubeunblock adblock lifecycle main; do
+        common system netshift youtubeunblock adblock pinning lifecycle main; do
         destination="$RUNTIME_DIR/${module}.sh"
         fetch_file "lib/${module}.sh" "$destination" || \
             fatal "Не удалось скачать lib/${module}.sh из ref ${REF}."
@@ -76,7 +76,8 @@ main() {
 
     for helper in \
         router-provisioner-netshift-start \
-        router-provisioner-netshift-refresh; do
+        router-provisioner-netshift-refresh \
+        router-provisioner-pin; do
         destination="$RUNTIME_DIR/$helper"
         fetch_file "runtime/$helper" "$destination" || \
             fatal "Не удалось скачать runtime/$helper из ref ${REF}."

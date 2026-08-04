@@ -74,8 +74,10 @@ install_youtubeunblock_package() {
 
 install_youtubeunblock() {
     latest=$(github_latest_tag "$YOUTUBEUNBLOCK_REPOSITORY" || true)
-    [ -n "$latest" ] || \
-        fatal 'Не удалось определить последний релиз youtubeUnblock.'
+    if [ -z "$latest" ]; then
+        warn 'Не удалось определить последний релиз youtubeUnblock.'
+        return 1
+    fi
     version=${latest#v}
 
     installed=$(youtubeunblock_installed_version)
@@ -88,18 +90,22 @@ install_youtubeunblock() {
     fi
 
     architecture=$(release_value DISTRIB_ARCH)
-    [ -n "$architecture" ] || \
-        fatal 'Не удалось определить архитектуру для youtubeUnblock.'
+    if [ -z "$architecture" ]; then
+        warn 'Не удалось определить архитектуру для youtubeUnblock.'
+        return 1
+    fi
 
     case "$(package_manager)" in
         apk) extension='apk' ;;
         opkg) extension='ipk' ;;
-        *) fatal 'Не найден пакетный менеджер.' ;;
+        *) warn 'Не найден пакетный менеджер.'; return 1 ;;
     esac
 
     daemon_url=$(github_asset_url "$YOUTUBEUNBLOCK_REPOSITORY" "$latest" \
-        "/youtubeUnblock-[^/]*-${architecture}-openwrt-[^/]*\\.${extension}\$") || \
-        fatal "Нет сборки youtubeUnblock $version для ${architecture} (${extension})."
+        "/youtubeUnblock-[^/]*-${architecture}-openwrt-[^/]*\\.${extension}\$") || {
+        warn "Нет сборки youtubeUnblock $version для ${architecture} (${extension})."
+        return 1
+    }
 
     luci_url=$(github_asset_url "$YOUTUBEUNBLOCK_REPOSITORY" "$latest" \
         "/luci-app-youtubeUnblock-[^/]*\\.${extension}\$" || true)
@@ -112,8 +118,10 @@ install_youtubeunblock() {
 
     install_youtubeunblock_dependencies
 
-    install_youtubeunblock_package "$daemon_url" || \
-        fatal 'Установка youtubeUnblock завершилась ошибкой.'
+    if ! install_youtubeunblock_package "$daemon_url"; then
+        warn 'Установка youtubeUnblock завершилась ошибкой.'
+        return 1
+    fi
 
     if [ -n "$luci_url" ]; then
         install_youtubeunblock_package "$luci_url" || \
@@ -122,72 +130,96 @@ install_youtubeunblock() {
         warn "В релизе $version нет luci-app-youtubeUnblock.${extension}."
     fi
 
-    [ -x "$YOUTUBEUNBLOCK_SERVICE" ] || \
-        fatal 'youtubeUnblock установлен не полностью.'
+    if [ ! -x "$YOUTUBEUNBLOCK_SERVICE" ]; then
+        warn 'youtubeUnblock установлен не полностью.'
+        return 1
+    fi
 }
 
-remove_youtubeunblock_sections() {
-    # Anonymous sections accumulate on every re-run, and duplicates make the
-    # daemon bind the same queue twice. Delete index 0 until none are left.
+# Keep the first section and drop the rest: duplicates make the daemon bind the
+# same nfqueue twice, but the first one carries whatever the owner configured.
+remove_extra_youtubeunblock_sections() {
     guard=0
     while [ "$guard" -lt 64 ]; do
-        uci -q delete youtubeUnblock.@section[0] 2>/dev/null || break
+        [ -n "$(uci_value 'youtubeUnblock.@section[1]')" ] || break
+        uci -q delete 'youtubeUnblock.@section[1]' 2>/dev/null || break
+        warn 'Удалена дублирующая секция youtubeUnblock.'
+        CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
         guard=$((guard + 1))
     done
 }
 
 configure_youtubeunblock() {
+    CONFIG_KEPT=0
+    CONFIG_CHANGED=0
+
     if [ "$DRY_RUN" -eq 1 ]; then
-        log 'Секции youtubeUnblock были бы пересозданы.'
+        log 'Секция youtubeUnblock была бы создана или дополнена.'
         section='@section[0]'
     else
         [ -f "$YOUTUBEUNBLOCK_CONFIG" ] || touch "$YOUTUBEUNBLOCK_CONFIG"
-        remove_youtubeunblock_sections
-        section=$(uci add youtubeUnblock section) || \
-            fatal 'Не удалось создать секцию youtubeUnblock.'
+
+        # Reuse the section the package's own uci-defaults created, or the one
+        # a previous run left behind. Recreating it would discard whatever the
+        # owner tuned in LuCI; duplicates would bind the same queue twice.
+        if [ -n "$(uci_value 'youtubeUnblock.@section[0]')" ]; then
+            section='@section[0]'
+            log 'Секция youtubeUnblock уже есть, дополняю её.'
+            remove_extra_youtubeunblock_sections
+        else
+            section=$(uci add youtubeUnblock section) || {
+                warn 'Не удалось создать секцию youtubeUnblock.'
+                return 1
+            }
+            CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
+        fi
     fi
 
-    run uci set 'youtubeUnblock.youtubeUnblock=youtubeUnblock'
-    run uci set 'youtubeUnblock.youtubeUnblock.conf_strat=ui_flags'
-    run uci set \
-        "youtubeUnblock.youtubeUnblock.packet_mark=$YOUTUBEUNBLOCK_PACKET_MARK"
-    run uci set \
-        "youtubeUnblock.youtubeUnblock.queue_num=$YOUTUBEUNBLOCK_QUEUE_NUM"
+    # Queue number and packet mark must match the nftables rule the package
+    # installs, so those are enforced. The rest are tuning knobs: apply them
+    # as defaults so a hand-tuned strategy survives a re-run.
+    uci_ensure_section youtubeUnblock.youtubeUnblock youtubeUnblock
+    uci_set_required youtubeUnblock.youtubeUnblock.conf_strat ui_flags
+    uci_set_required youtubeUnblock.youtubeUnblock.packet_mark \
+        "$YOUTUBEUNBLOCK_PACKET_MARK"
+    uci_set_required youtubeUnblock.youtubeUnblock.queue_num \
+        "$YOUTUBEUNBLOCK_QUEUE_NUM"
 
-    run uci set "youtubeUnblock.$section.name=Default section"
-    run uci set "youtubeUnblock.$section.enabled=1"
-    run uci set "youtubeUnblock.$section.tls_enabled=1"
-    run uci set "youtubeUnblock.$section.fake_sni=0"
-    run uci set "youtubeUnblock.$section.faking_strategy=pastseq"
-    run uci set "youtubeUnblock.$section.fake_sni_seq_len=1"
-    run uci set "youtubeUnblock.$section.fake_sni_type=default"
-    run uci set "youtubeUnblock.$section.frag=tcp"
-    run uci set "youtubeUnblock.$section.frag_sni_reverse=1"
-    run uci set "youtubeUnblock.$section.frag_sni_faked=0"
-    run uci set "youtubeUnblock.$section.frag_middle_sni=1"
-    run uci set "youtubeUnblock.$section.frag_sni_pos=1"
-    run uci set "youtubeUnblock.$section.seg2delay=0"
-    run uci set "youtubeUnblock.$section.fk_winsize=0"
-    run uci set "youtubeUnblock.$section.synfake=0"
-    run uci set "youtubeUnblock.$section.sni_detection=parse"
-    run uci set "youtubeUnblock.$section.all_domains=0"
+    uci_set_default "youtubeUnblock.$section.name" 'Default section'
+    uci_set_required "youtubeUnblock.$section.enabled" 1
+    uci_set_default "youtubeUnblock.$section.tls_enabled" 1
+    uci_set_default "youtubeUnblock.$section.fake_sni" 0
+    uci_set_default "youtubeUnblock.$section.faking_strategy" pastseq
+    uci_set_default "youtubeUnblock.$section.fake_sni_seq_len" 1
+    uci_set_default "youtubeUnblock.$section.fake_sni_type" default
+    uci_set_default "youtubeUnblock.$section.frag" tcp
+    uci_set_default "youtubeUnblock.$section.frag_sni_reverse" 1
+    uci_set_default "youtubeUnblock.$section.frag_sni_faked" 0
+    uci_set_default "youtubeUnblock.$section.frag_middle_sni" 1
+    uci_set_default "youtubeUnblock.$section.frag_sni_pos" 1
+    uci_set_default "youtubeUnblock.$section.seg2delay" 0
+    uci_set_default "youtubeUnblock.$section.fk_winsize" 0
+    uci_set_default "youtubeUnblock.$section.synfake" 0
+    uci_set_default "youtubeUnblock.$section.sni_detection" parse
+    uci_set_default "youtubeUnblock.$section.all_domains" 0
 
-    uci_delete "youtubeUnblock.$section.sni_domains"
+    # Domains are added, never replaced: the owner may have appended their own.
     printf '%s\n' "$YOUTUBEUNBLOCK_SNI_DOMAINS" | \
         while IFS= read -r sni_domain; do
             [ -n "$sni_domain" ] || continue
-            run uci add_list \
-                "youtubeUnblock.$section.sni_domains=$sni_domain"
+            uci_add_list_once "youtubeUnblock.$section.sni_domains" \
+                "$sni_domain"
         done
 
-    run uci set "youtubeUnblock.$section.quic_drop=0"
-    run uci set "youtubeUnblock.$section.udp_mode=drop"
-    run uci set "youtubeUnblock.$section.udp_fake_seq_len=6"
-    run uci set "youtubeUnblock.$section.udp_fake_len=64"
-    run uci set "youtubeUnblock.$section.udp_filter_quic=parse"
-    run uci set "youtubeUnblock.$section.udp_faking_strategy=none"
+    uci_set_default "youtubeUnblock.$section.quic_drop" 0
+    uci_set_default "youtubeUnblock.$section.udp_mode" drop
+    uci_set_default "youtubeUnblock.$section.udp_fake_seq_len" 6
+    uci_set_default "youtubeUnblock.$section.udp_fake_len" 64
+    uci_set_default "youtubeUnblock.$section.udp_filter_quic" parse
+    uci_set_default "youtubeUnblock.$section.udp_faking_strategy" none
 
     run uci commit youtubeUnblock
+    report_configuration_diff 'youtubeUnblock'
 }
 
 start_youtubeunblock() {

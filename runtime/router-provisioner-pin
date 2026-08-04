@@ -1,0 +1,150 @@
+#!/bin/ash
+# Priority failover for NetShift selector groups.
+#
+# sing-box has no priority-ordered outbound group: urltest always picks the
+# fastest node, and a selector never fails over on its own. This helper keeps
+# each group pinned to its primary node and moves to the reserve only while the
+# primary is actually down, then moves back as soon as it answers again.
+#
+# Groups are described in PINNED_FILE, one per line:
+#     <selector group>|<primary keyword>|<reserve keyword>
+# Keywords are matched against the node names the group actually offers, so the
+# operator never has to type emoji or the exact node name.
+set -u
+
+TAG='router-provisioner-pin'
+PINNED_FILE='/etc/router-provisioner/pinned'
+SING_BOX_CONFIG='/etc/sing-box/config.json'
+TEST_URL='https://www.gstatic.com/generate_204'
+TIMEOUT=5000
+LOCK='/tmp/router-provisioner-pin.lock'
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+cleanup() {
+    rmdir "$LOCK" 2>/dev/null || true
+}
+
+trap cleanup 0 HUP INT TERM
+
+[ -s "$PINNED_FILE" ] || exit 0
+command -v curl >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+
+mkdir "$LOCK" 2>/dev/null || exit 0
+
+# The Clash API binds to whatever external_controller says - usually the LAN
+# address, not loopback. Read it from the generated config rather than guessing:
+# uci returns the LAN address with its CIDR suffix, which builds a broken URL.
+# The body check matters too, because port 80 answers with the web UI and would
+# otherwise look like a healthy API.
+api_base() {
+    controller=$(jq -r '.experimental.clash_api.external_controller // empty' \
+        "$SING_BOX_CONFIG" 2>/dev/null)
+
+    for candidate in "$controller" '127.0.0.1:9090'; do
+        [ -n "$candidate" ] || continue
+
+        if curl -s -m 3 "http://$candidate/version" 2>/dev/null | \
+            grep -q '"version"'; then
+            printf 'http://%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# This BusyBox has no od, and the Clash API accepts raw UTF-8 in a path.
+# Only spaces actually need escaping.
+urlencode() {
+    printf '%s' "$1" | sed 's/ /%20/g'
+}
+
+api_get() {
+    curl -s -m 5 "$1/proxies/$(urlencode "$2")" 2>/dev/null
+}
+
+# Resolve a keyword to a node the group really offers, skipping the group's own
+# urltest entry so a keyword can never select the automatic group by accident.
+resolve_node() {
+    base=$1
+    group=$2
+    keyword=$3
+
+    [ -n "$keyword" ] || return 1
+
+    api_get "$base" "$group" | \
+        jq -r --arg kw "$keyword" \
+            '.all[]? | select(test("-urltest-out$") | not) | select(contains($kw))' \
+        2>/dev/null | head -n 1
+}
+
+node_is_alive() {
+    base=$1
+    node=$2
+
+    delay=$(curl -s -m 12 -G \
+        "$base/proxies/$(urlencode "$node")/delay" \
+        --data "timeout=$TIMEOUT" \
+        --data-urlencode "url=$TEST_URL" \
+        2>/dev/null | jq -r '.delay // empty' 2>/dev/null)
+
+    [ -n "$delay" ] && [ "$delay" -gt 0 ] 2>/dev/null
+}
+
+current_node() {
+    api_get "$1" "$2" | jq -r '.now // empty' 2>/dev/null
+}
+
+select_node() {
+    curl -s -m 5 -o /dev/null -X PUT \
+        -H 'Content-Type: application/json' \
+        --data "$(jq -n --arg name "$3" '{name: $name}')" \
+        "$1/proxies/$(urlencode "$2")" 2>/dev/null
+}
+
+BASE=$(api_base) || exit 0
+
+grep -v '^[[:space:]]*#' "$PINNED_FILE" | \
+    while IFS='|' read -r group primary_keyword reserve_keyword; do
+        [ -n "$group" ] || continue
+
+        now=$(current_node "$BASE" "$group")
+        [ -n "$now" ] || continue
+
+        primary=$(resolve_node "$BASE" "$group" "$primary_keyword")
+        if [ -z "$primary" ]; then
+            log "$group: no node matches '$primary_keyword', leaving it alone"
+            continue
+        fi
+
+        if node_is_alive "$BASE" "$primary"; then
+            if [ "$now" != "$primary" ]; then
+                select_node "$BASE" "$group" "$primary"
+                log "$group: primary is back, switched to $primary"
+            fi
+            continue
+        fi
+
+        # The primary is down. Move to the reserve, but only if it works -
+        # switching to a second dead node would just hide the real problem.
+        [ "$now" = "$primary" ] || continue
+
+        reserve=$(resolve_node "$BASE" "$group" "$reserve_keyword")
+        if [ -z "$reserve" ]; then
+            log "$group: primary is down and no reserve is configured"
+            continue
+        fi
+
+        if node_is_alive "$BASE" "$reserve"; then
+            select_node "$BASE" "$group" "$reserve"
+            log "$group: primary is down, switched to $reserve"
+        else
+            log "$group: primary and reserve are both down, staying put"
+        fi
+    done
+
+exit 0

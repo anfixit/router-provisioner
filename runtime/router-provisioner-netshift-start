@@ -138,14 +138,24 @@ if ! wait_for_uplink; then
     exit 1
 fi
 
+# Selector choices live in sing-box memory and its cache sits in tmpfs, so a
+# reboot always resets pinned groups to the automatic urltest. Re-pin them now
+# instead of waiting up to a minute for the cron helper.
+restore_pinned_nodes() {
+    [ -x /usr/bin/router-provisioner-pin ] || return 0
+    /usr/bin/router-provisioner-pin >/dev/null 2>&1 || true
+}
+
 if attempt_start; then
     log 'NetShift is ready'
+    restore_pinned_nodes
     exit 0
 fi
 
 log 'first start failed; retrying once'
 if attempt_start; then
     log 'NetShift recovered on the second attempt'
+    restore_pinned_nodes
     exit 0
 fi
 
