@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+## [2.3.3] - 2026-08-04
+
+### Fixed
+
+- Установка обрывалась на `uci: Parse error` сразу после настройки youtubeUnblock. В POSIX shell нет локальных переменных, а helper'ы `uci_ensure_section`, `uci_set_default`, `uci_set_required`, `uci_add_list_once` и `uci_delete` присваивали ходовые имена `section`, `option`, `value`, `type`. Вызов затирал переменную вызывающей функции, и следующий ключ собирался из мусора вида `youtubeUnblock.youtubeUnblock.youtubeUnblock.name`. Все служебные переменные получили префикс `_uci_`.
+- Та же поломка ждала модуль фиксации узлов: `write_pinned_section` строит ключи из `$section` и сломался бы на первом же сервисе.
+
 ## [2.3.2] - 2026-08-04
 
 ### Fixed

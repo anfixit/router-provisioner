@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.3.2'
+VERSION='2.3.3'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -550,6 +550,61 @@ test_reconciliation_primitives_preserve_user_values() {
     rm -rf "$fixture"
 }
 
+test_uci_helpers_do_not_clobber_caller_variables() {
+    fixture=$(mktemp -d)
+    UCI_DB="$fixture/db"
+    : > "$UCI_DB"
+    DRY_RUN=0
+
+    uci() {
+        [ "$1" = '-q' ] && shift
+        action=$1
+        shift
+        case "$action" in
+            get)
+                v=$(sed -n "s|^$1=||p" "$UCI_DB" | head -n 1)
+                [ -n "$v" ] || return 1
+                printf '%s\n' "$v"
+                ;;
+            set|add_list)
+                printf '%s\n' "$1" >> "$UCI_DB"
+                ;;
+            *) return 0 ;;
+        esac
+    }
+
+    # POSIX sh has no locals. A helper that assigns to "section", "option" or
+    # "value" silently rewrites the caller's variable of the same name, and the
+    # caller then builds nonsense keys out of it.
+    section='@section[0]'
+    option='keep-me'
+    value='keep-me-too'
+    type='keep-this'
+
+    uci_ensure_section 'youtubeUnblock.youtubeUnblock' youtubeUnblock
+    uci_set_default "youtubeUnblock.$section.name" 'Default section'
+    uci_set_required "youtubeUnblock.$section.enabled" 1
+    uci_add_list_once "youtubeUnblock.$section.sni_domains" youtube.com
+    uci_delete "youtubeUnblock.$section.stale"
+
+    assert_equal '@section[0]' "$section" \
+        'uci helpers must not overwrite the caller section variable'
+    assert_equal 'keep-me' "$option" \
+        'uci helpers must not overwrite a caller variable named option'
+    assert_equal 'keep-me-too' "$value" \
+        'uci helpers must not overwrite a caller variable named value'
+    assert_equal 'keep-this' "$type" \
+        'uci helpers must not overwrite a caller variable named type'
+
+    # The written keys must stay single-prefixed, not youtubeUnblock.<section>.
+    assert_false 'a doubled config prefix means the section was clobbered' \
+        grep -q 'youtubeUnblock\.youtubeUnblock\.youtubeUnblock' "$UCI_DB"
+
+    unset -f uci 2>/dev/null || true
+    unset section option value type 2>/dev/null || true
+    rm -rf "$fixture"
+}
+
 test_configuration_is_reconciled_not_rewritten() {
     netshift=$(cat "$PROJECT_DIR/lib/netshift.sh")
     youtubeunblock=$(cat "$PROJECT_DIR/lib/youtubeunblock.sh")
@@ -686,5 +741,6 @@ test_declining_a_step_never_aborts_the_run
 test_pinned_sections_are_optional_and_ordered
 test_pin_helper_contract
 test_youtube_direct_list_is_media_only
+test_uci_helpers_do_not_clobber_caller_variables
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

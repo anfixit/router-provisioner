@@ -4,7 +4,7 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION=${ROUTER_PROVISIONER_VERSION:-2.3.2}
+VERSION=${ROUTER_PROVISIONER_VERSION:-2.3.3}
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -48,14 +48,14 @@ run() {
 }
 
 uci_delete() {
-    option=$1
+    _uci_option=$1
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '[DRY-RUN] uci -q delete %s\n' "$option"
+        printf '[DRY-RUN] uci -q delete %s\n' "$_uci_option"
         return 0
     fi
 
-    uci -q delete "$option" 2>/dev/null || true
+    uci -q delete "$_uci_option" 2>/dev/null || true
 }
 
 # Reconciliation primitives. The provisioner is re-run on routers whose owner
@@ -68,36 +68,44 @@ uci_value() {
     uci -q get "$1" 2>/dev/null || printf ''
 }
 
+# POSIX sh has no local variables, so every helper below prefixes its own with
+# _uci_. Plain names like "section" or "value" silently clobber the caller's
+# variable of the same name: uci_ensure_section used to overwrite the section
+# the caller was still building, which turned the next write into
+# youtubeUnblock.youtubeUnblock.youtubeUnblock.name and aborted the whole run
+# on a uci parse error.
+
 # Write only when the option has no value yet. Anything the user already chose
 # stays untouched - these are preferences, not correctness requirements.
 uci_set_default() {
-    option=$1
-    value=$2
+    _uci_option=$1
+    _uci_new=$2
 
-    if [ -n "$(uci_value "$option")" ]; then
+    if [ -n "$(uci_value "$_uci_option")" ]; then
         CONFIG_KEPT=$((CONFIG_KEPT + 1))
         return 0
     fi
 
-    run uci set "$option=$value"
+    run uci set "$_uci_option=$_uci_new"
     CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
 }
 
 # Write whenever the value differs. Reserved for options the guarded lifecycle
 # depends on, where a wrong value breaks the router rather than the taste.
 uci_set_required() {
-    option=$1
-    value=$2
+    _uci_option=$1
+    _uci_new=$2
 
-    current=$(uci_value "$option")
+    _uci_current=$(uci_value "$_uci_option")
 
-    if [ "$current" = "$value" ]; then
+    if [ "$_uci_current" = "$_uci_new" ]; then
         CONFIG_KEPT=$((CONFIG_KEPT + 1))
         return 0
     fi
 
-    [ -n "$current" ] && log "Исправляю $option: '$current' -> '$value'"
-    run uci set "$option=$value"
+    [ -n "$_uci_current" ] && \
+        log "Исправляю $_uci_option: '$_uci_current' -> '$_uci_new'"
+    run uci set "$_uci_option=$_uci_new"
     CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
 }
 
@@ -106,28 +114,28 @@ uci_list_contains() {
 }
 
 uci_add_list_once() {
-    option=$1
-    value=$2
+    _uci_option=$1
+    _uci_new=$2
 
-    if uci_list_contains "$option" "$value"; then
+    if uci_list_contains "$_uci_option" "$_uci_new"; then
         CONFIG_KEPT=$((CONFIG_KEPT + 1))
         return 0
     fi
 
-    run uci add_list "$option=$value"
+    run uci add_list "$_uci_option=$_uci_new"
     CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
 }
 
 uci_ensure_section() {
-    section=$1
-    type=$2
+    _uci_section=$1
+    _uci_type=$2
 
-    if [ -n "$(uci_value "$section")" ]; then
+    if [ -n "$(uci_value "$_uci_section")" ]; then
         CONFIG_KEPT=$((CONFIG_KEPT + 1))
         return 0
     fi
 
-    run uci set "$section=$type"
+    run uci set "$_uci_section=$_uci_type"
     CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
 }
 
