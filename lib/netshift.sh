@@ -280,7 +280,13 @@ configure_netshift() {
     uci_set_default netshift.VPN.urltest_testing_url \
         https://www.gstatic.com/generate_204
     uci_set_default netshift.VPN.enable_udp_over_tcp 0
-    uci_set_default netshift.VPN.global_proxy 1
+    # Route by list, not everything. A global proxy pushes every byte through
+    # the subscription - video included - and leaves the router useless the
+    # moment the proxy is unhappy. With the list model only what is actually
+    # blocked takes the tunnel, everything else goes out directly at full ISP
+    # speed, and a dead subscription costs you the blocked sites, not the net.
+    uci_set_default netshift.VPN.global_proxy 0
+    uci_add_list_once netshift.VPN.community_lists russia_inside
     uci_set_default netshift.VPN.user_domain_list_type disabled
     uci_set_default netshift.VPN.user_subnet_list_type disabled
     uci_set_default netshift.VPN.mixed_proxy_enabled 0
@@ -360,16 +366,16 @@ configure_direct_section() {
         return 0
     fi
 
-    uci_ensure_section netshift.RU_DIRECT section
-    uci_set_required netshift.RU_DIRECT.connection_type exclusion
-    uci_set_default netshift.RU_DIRECT.global_proxy 0
-    uci_add_list_once netshift.RU_DIRECT.community_lists russia_outside
-    uci_set_default netshift.RU_DIRECT.user_domain_list_type text
-    direct_domains='.ru
-.su'
-    uci_set_default netshift.RU_DIRECT.user_domains_text "$direct_domains"
-    uci_set_default netshift.RU_DIRECT.user_subnet_list_type disabled
-    uci_add_list_once netshift.RU_DIRECT.local_domain_lists "$YOUTUBE_LIST"
+    # An exclusion wins over the proxy lists, and it is needed for exactly one
+    # reason: russia_inside carries YouTube, so without this the video CDN
+    # would ride the subscription. Russian sites need no exclusion here - with
+    # the list model nothing is proxied unless a list asks for it.
+    uci_ensure_section netshift.YT_DIRECT section
+    uci_set_required netshift.YT_DIRECT.connection_type exclusion
+    uci_set_default netshift.YT_DIRECT.global_proxy 0
+    uci_set_default netshift.YT_DIRECT.user_domain_list_type disabled
+    uci_set_default netshift.YT_DIRECT.user_subnet_list_type disabled
+    uci_add_list_once netshift.YT_DIRECT.local_domain_lists "$YOUTUBE_LIST"
 }
 
 # Which domains get a FakeIP depends entirely on the routing topology: with a

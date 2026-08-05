@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.3.5'
+VERSION='2.4.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -724,6 +724,40 @@ test_unconfigured_proxy_sections_are_removed() {
         'gstatic never returns a FakeIP and must not be probed'
 }
 
+test_default_topology_routes_by_list() {
+    netshift=$(cat "$PROJECT_DIR/lib/netshift.sh")
+    adblock=$(cat "$PROJECT_DIR/lib/adblock.sh")
+
+    # Route what is blocked, not everything: a global proxy pushes video
+    # through the subscription and takes the whole net down with the proxy.
+    assert_contains "$netshift" 'uci_set_default netshift.VPN.global_proxy 0' \
+        'the proxy section must route by list, not globally'
+    assert_contains "$netshift" \
+        'uci_add_list_once netshift.VPN.community_lists russia_inside' \
+        'the proxy section must carry the blocked-domains list'
+    assert_contains "$netshift" 'netshift.YT_DIRECT' \
+        'YouTube needs its own exclusion: russia_inside carries it'
+    assert_not_contains "$netshift" 'netshift.RU_DIRECT.community_lists' \
+        'Russian sites need no exclusion once nothing is proxied by default'
+
+    # NetShift stores the resolver without a scheme; its diagnostic splits the
+    # value on the first slash and would probe a host named "https:".
+    assert_equal 'dns.adguard-dns.com/dns-query' \
+        "$(strip_url_scheme 'https://dns.adguard-dns.com/dns-query')" \
+        'the scheme must be stripped before storing the resolver'
+    assert_equal 'd.adguard-dns.com/dns-query/id' \
+        "$(strip_url_scheme 'd.adguard-dns.com/dns-query/id')" \
+        'a scheme-less address must pass through untouched'
+    assert_true 'the address shown by AdGuard must be accepted' \
+        valid_doh_url 'https://d.adguard-dns.com/dns-query/id'
+    assert_true 'the form the interface expects must be accepted too' \
+        valid_doh_url 'd.adguard-dns.com/dns-query/id'
+    assert_false 'a bare host is not a DoH endpoint' \
+        valid_doh_url 'dns.adguard-dns.com'
+    assert_not_contains "$adblock" "ADGUARD_DEFAULT_DOH='https://" \
+        'the public resolver must be stored without a scheme'
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -764,5 +798,6 @@ test_pin_helper_contract
 test_youtube_direct_list_is_media_only
 test_uci_helpers_do_not_clobber_caller_variables
 test_unconfigured_proxy_sections_are_removed
+test_default_topology_routes_by_list
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

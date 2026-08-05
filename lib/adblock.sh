@@ -6,15 +6,26 @@
 # This deliberately does NOT install https-dns-proxy: NetShift treats it as a
 # conflicting package and its own installer refuses to run while it is present.
 
-ADGUARD_DEFAULT_DOH='https://dns.adguard-dns.com/dns-query'
-ADGUARD_FAMILY_DOH='https://family.adguard-dns.com/dns-query'
+ADGUARD_DEFAULT_DOH='dns.adguard-dns.com/dns-query'
+ADGUARD_FAMILY_DOH='family.adguard-dns.com/dns-query'
 ADGUARD_BOOTSTRAP='77.88.8.8'
 
-# Personal endpoints look like https://d.adguard-dns.com/dns-query/<id>.
-# NetShift parses host, port and path, so the full URL works as-is.
-valid_doh_url() {
+# Personal endpoints are shown as https://d.adguard-dns.com/dns-query/<id>, so
+# accept that form - but store it without the scheme. NetShift's own config
+# builder copes with either, while its diagnostic splits the value on the first
+# slash: "https://host/path" leaves it probing a host literally named "https:"
+# and reporting a healthy resolver as broken.
+strip_url_scheme() {
     case "$1" in
-        https://*/*) return 0 ;;
+        https://*) printf '%s\n' "${1#https://}" ;;
+        http://*) printf '%s\n' "${1#http://}" ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+valid_doh_url() {
+    case "$(strip_url_scheme "$1")" in
+        */*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -32,7 +43,7 @@ configure_adblock() {
     # there: fall through to the public resolver instead.
     if [ "$ASSUME_YES" -eq 0 ] && \
         ask_yes_no 'Есть персональный AdGuard DNS?' no; then
-        log 'Адрес вида https://d.adguard-dns.com/dns-query/ВАШ_ИДЕНТИФИКАТОР'
+        log 'Адрес из кабинета, например d.adguard-dns.com/dns-query/ВАШ_ИД'
         log 'Берётся в личном кабинете AdGuard, раздел «Устройства».'
 
         while :; do
@@ -44,11 +55,11 @@ configure_adblock() {
             [ -n "$candidate" ] || break
 
             if valid_doh_url "$candidate"; then
-                resolver=$candidate
+                resolver=$(strip_url_scheme "$candidate")
                 break
             fi
 
-            warn 'Нужен полный адрес вида https://хост/путь.'
+            warn 'Нужен адрес вида хост/путь, можно с https:// в начале.'
         done
     fi
 
