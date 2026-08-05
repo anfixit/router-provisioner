@@ -79,14 +79,15 @@ download_ruleset_preflight() {
     [ -s "$PREFLIGHT" ]
 }
 
-# www.gstatic.com is the urltest_testing_url, and NetShift deliberately keeps
-# that domain on the direct path so the health check measures real latency.
-# It therefore never returns a FakeIP. Probe several proxied domains instead
-# and accept the first FakeIP answer.
-fakeip_ready() {
+# Which domains get a FakeIP depends entirely on the routing topology: with a
+# global proxy NetShift marks everything in nftables and hands FakeIP only to
+# the excluded lists, so demanding a 198.18.x answer for a chosen domain fails
+# on a perfectly healthy router. What always holds is that sing-box answers DNS
+# at all once it is up, so that is the readiness signal.
+resolver_answers() {
     for domain in $PROBE_DOMAINS; do
         if nslookup "$domain" 127.0.0.42 2>/dev/null | \
-            grep -Eq '198\.18\.'; then
+            grep -Eq '^Address: *[0-9]'; then
             return 0
         fi
     done
@@ -99,7 +100,7 @@ service_ready() {
     [ -s /etc/sing-box/config.json ] || return 1
     /usr/bin/sing-box check -c /etc/sing-box/config.json \
         >/dev/null 2>&1 || return 1
-    fakeip_ready
+    resolver_answers
 }
 
 wait_for_service() {
@@ -114,21 +115,13 @@ wait_for_service() {
     return 1
 }
 
-prepare_lists() {
-    /etc/init.d/netshift stop >/dev/null 2>&1 || true
-
-    if ! /usr/bin/netshift list_update >/dev/null 2>&1; then
-        log 'list update failed before startup'
-        return 1
-    fi
-
-    # list_update may touch service state; force a clean start boundary.
-    /etc/init.d/netshift stop >/dev/null 2>&1 || true
-}
-
+# Plain restart, nothing else. NetShift's own start downloads the lists and
+# writes the local rule-set files under /tmp/sing-box/rulesets. Stopping it
+# again after a list_update wipes those files, and the next start skips
+# regenerating them because it sees an unchanged config hash - sing-box then
+# dies on "parse rule-set: no such file or directory".
 attempt_start() {
-    prepare_lists || return 1
-    /etc/init.d/netshift start >/dev/null 2>&1 || true
+    /etc/init.d/netshift restart >/dev/null 2>&1 || true
     wait_for_service
 }
 

@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.3.4'
+VERSION='2.3.5'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -231,8 +231,10 @@ test_guarded_boot_contract() {
         'a bare default route must not be trusted as a ready uplink'
     assert_contains "$source" 'russia_outside.preflight.srs' \
         'remote ruleset preflight is missing'
-    assert_contains "$source" '/usr/bin/netshift list_update' \
-        'lists must be prepared before NetShift starts'
+    # A stop after list_update wipes /tmp/sing-box/rulesets, and the next
+    # start skips regenerating them on an unchanged config hash.
+    assert_not_contains "$source" 'prepare_lists' \
+        'the extra stop/list_update dance destroys the local rule-set files'
     assert_contains "$source" 'first start failed; retrying once' \
         'bounded second attempt is missing'
     assert_contains "$source" \
@@ -715,8 +717,8 @@ test_unconfigured_proxy_sections_are_removed() {
         'the placeholder is recognised by its empty proxy string'
 
     # The installer validation must use the same probe as the boot helper.
-    assert_contains "$netshift" 'fakeip_is_ready' \
-        'validation must probe several proxied domains'
+    assert_contains "$netshift" 'resolver_answers' \
+        'validation must accept any answer from the sing-box resolver'
     assert_not_contains "$netshift" \
         'nslookup www.gstatic.com 127.0.0.42' \
         'gstatic never returns a FakeIP and must not be probed'

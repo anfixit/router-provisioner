@@ -372,18 +372,17 @@ configure_direct_section() {
     uci_add_list_once netshift.RU_DIRECT.local_domain_lists "$YOUTUBE_LIST"
 }
 
-# www.gstatic.com is the urltest_testing_url, and NetShift deliberately keeps
-# that domain on the direct path so the health check measures real latency. It
-# therefore never returns a FakeIP, and probing it made this validation wait out
-# its full timeout on a perfectly healthy router. Probe proxied domains instead
-# and accept the first FakeIP answer.
-FAKEIP_PROBE_DOMAINS='discord.com x.com web.telegram.org rutracker.org
-instagram.com youtube.com'
+# Which domains get a FakeIP depends entirely on the routing topology: with a
+# global proxy NetShift marks everything in nftables and hands FakeIP only to
+# the excluded lists, so demanding a 198.18.x answer for a chosen domain fails
+# on a perfectly healthy router. What always holds is that sing-box answers DNS
+# at all once it is up, so that is the readiness signal.
+RESOLVER_PROBE_DOMAINS='example.com openwrt.org cloudflare.com'
 
-fakeip_is_ready() {
-    for probe_domain in $FAKEIP_PROBE_DOMAINS; do
+resolver_answers() {
+    for probe_domain in $RESOLVER_PROBE_DOMAINS; do
         if nslookup "$probe_domain" 127.0.0.42 2>/dev/null | \
-            grep -Eq '198\.18\.'; then
+            grep -Eq '^Address: *[0-9]'; then
             return 0
         fi
     done
@@ -420,7 +419,7 @@ start_and_validate_netshift() {
         if pgrep -f '[s]ing-box run' >/dev/null 2>&1 && \
             /usr/bin/sing-box check -c /etc/sing-box/config.json \
                 >/dev/null 2>&1 && \
-            fakeip_is_ready; then
+            resolver_answers; then
             log 'NetShift, sing-box и FakeIP работают.'
             return 0
         fi
