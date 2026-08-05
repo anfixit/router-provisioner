@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.4.0'
+VERSION='2.4.1'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -244,6 +244,10 @@ test_guarded_boot_contract() {
         'native NetShift boot must be disabled'
     assert_contains "$lifecycle" 'START=99' \
         'guard service must start after ordinary network services'
+    # NetShift's own subscription cron lands on :17 for every interval it
+    # offers; two updaters rewriting the same cache collide there.
+    assert_not_contains "$lifecycle" "printf '17 * * * * " \
+        'the refresh cron must not share a minute with NetShift own updater'
 }
 
 test_refresh_contract() {

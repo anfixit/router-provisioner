@@ -58,7 +58,10 @@ EOF_SERVICE
         /etc/crontabs/root > "$temporary" || true
     {
         cat "$temporary"
-        printf '17 * * * * %s\n' "$REFRESH_HELPER"
+        # Not :17 - NetShift's own subscription cron lands there for every
+        # interval it offers, and two updaters rewriting the same cache at the
+        # same minute is how a working subscription turns into a broken one.
+        printf '41 * * * * %s\n' "$REFRESH_HELPER"
     } > /etc/crontabs/root
     rm -f "$temporary"
     chmod 600 /etc/crontabs/root
