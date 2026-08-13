@@ -139,8 +139,38 @@ restore_pinned_nodes() {
     /usr/bin/router-provisioner-pin >/dev/null 2>&1 || true
 }
 
+# NetShift hardcodes when it updates: 09:13 for lists, 09:17 for subscriptions.
+# Those times cannot be moved through its configuration, and it rewrites the
+# crontab on every start, so they have to be corrected afterwards. It matters
+# because each update restarts sing-box, and a restart drops the pinned node
+# for a few seconds - long enough for a service to see a new exit address and
+# demand a fresh login. Middle of the working day is the worst moment for that.
+# The subscription line goes away entirely: the refresh helper already updates
+# subscriptions nightly and can roll back, which NetShift's own job cannot.
+retime_netshift_cron() {
+    [ -f /etc/crontabs/root ] || return 0
+
+    corrected="/tmp/router-provisioner-cron.$$"
+    grep -v '/usr/bin/netshift subscription_update' /etc/crontabs/root | \
+        sed 's|^.*/usr/bin/netshift list_update *$|30 3 * * * /usr/bin/netshift list_update|' \
+        > "$corrected" 2>/dev/null || {
+        rm -f "$corrected"
+        return 0
+    }
+
+    if ! cmp -s "$corrected" /etc/crontabs/root; then
+        cat "$corrected" > /etc/crontabs/root
+        chmod 600 /etc/crontabs/root
+        /etc/init.d/cron restart >/dev/null 2>&1 || true
+        log 'netshift update schedule moved to the small hours'
+    fi
+
+    rm -f "$corrected"
+}
+
 if attempt_start; then
     log 'NetShift is ready'
+    retime_netshift_cron
     restore_pinned_nodes
     exit 0
 fi
@@ -148,6 +178,7 @@ fi
 log 'first start failed; retrying once'
 if attempt_start; then
     log 'NetShift recovered on the second attempt'
+    retime_netshift_cron
     restore_pinned_nodes
     exit 0
 fi

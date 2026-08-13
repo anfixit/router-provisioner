@@ -61,7 +61,12 @@ EOF_SERVICE
         # Not :17 - NetShift's own subscription cron lands there for every
         # interval it offers, and two updaters rewriting the same cache at the
         # same minute is how a working subscription turns into a broken one.
-        printf '41 * * * * %s\n' "$REFRESH_HELPER"
+        # Nightly, not hourly. Every refresh restarts sing-box, and a restart
+        # drops whatever node a selector was pinned to: sing-box keeps that
+        # choice in memory only. A service then sees a new exit address and
+        # asks the user to log in again. Twenty-four of those a day is a lot of
+        # noise for a subscription that changes once in a while.
+        printf '0 3 * * * %s\n' "$REFRESH_HELPER"
     } > /etc/crontabs/root
     rm -f "$temporary"
     chmod 600 /etc/crontabs/root

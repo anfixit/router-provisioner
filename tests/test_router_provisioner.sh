@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.4.1'
+VERSION='2.5.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -762,6 +762,28 @@ test_default_topology_routes_by_list() {
         'the public resolver must be stored without a scheme'
 }
 
+test_maintenance_runs_at_night() {
+    lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
+    boot=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
+
+    # Every refresh restarts sing-box, and a restart drops the pinned node,
+    # which reads to a service as a new exit address and a fresh login prompt.
+    assert_contains "$lifecycle" "printf '0 3 * * * %s" \
+        'the subscription refresh must run nightly, not hourly'
+    assert_not_contains "$lifecycle" "printf '41 * * * * %s" \
+        'an hourly refresh restarts sing-box 24 times a day'
+
+    # NetShift hardcodes 09:13 and 09:17 and rewrites the crontab on every
+    # start, so the times can only be corrected afterwards.
+    assert_contains "$boot" 'retime_netshift_cron' \
+        'NetShift own schedule must be moved out of working hours'
+    assert_contains "$boot" '30 3 * * * /usr/bin/netshift list_update' \
+        'the list update must land at night'
+    assert_contains "$boot" \
+        "grep -v '/usr/bin/netshift subscription_update'" \
+        'NetShift own subscription job duplicates the helper that can roll back'
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -803,5 +825,6 @@ test_youtube_direct_list_is_media_only
 test_uci_helpers_do_not_clobber_caller_variables
 test_unconfigured_proxy_sections_are_removed
 test_default_topology_routes_by_list
+test_maintenance_runs_at_night
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"
