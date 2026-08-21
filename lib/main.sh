@@ -111,6 +111,7 @@ run_netshift_steps() {
     fi
 
     configure_netshift
+    configure_ipv6_advertisement
     NETSHIFT_READY=1
 }
 

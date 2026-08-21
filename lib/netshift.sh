@@ -437,3 +437,55 @@ start_and_validate_netshift() {
         tail -n 80 >&2 || true
     fatal 'NetShift не стал готов за 100 секунд.'
 }
+
+# NetShift routes IPv4 only. A LAN that still advertises IPv6 hands every client
+# a global address the client cannot actually use: the router itself reaches the
+# IPv6 internet, the clients do not, because nothing forwards or proxies it.
+# Applications see an IPv6 address on the interface, try IPv6 first per Happy
+# Eyeballs, wait out the timeout and only then fall back to IPv4. The owner sees
+# apps that hang for a few seconds at random - Telegram and Instagram worst of
+# all, since they reopen long-lived connections most often.
+lan_advertises_ipv6() {
+    case "$(uci_value dhcp.lan.ra)" in
+        ''|disabled) : ;;
+        *) return 0 ;;
+    esac
+
+    case "$(uci_value dhcp.lan.dhcpv6)" in
+        ''|disabled) : ;;
+        *) return 0 ;;
+    esac
+
+    [ -n "$(uci_value network.lan.ip6assign)" ]
+}
+
+configure_ipv6_advertisement() {
+    [ "$(uci_value netshift.settings.enable_ipv6)" = 0 ] || return 0
+    lan_advertises_ipv6 || return 0
+
+    printf '\n'
+    log 'Роутер раздаёт клиентам IPv6, а NetShift маршрутизирует только IPv4.'
+    log 'Устройства получают адрес, которым не могут пользоваться: приложения'
+    log 'пробуют IPv6 первым, ждут таймаут и только потом переходят на IPv4.'
+    log 'Выглядит это как случайные подвисания Telegram и подобных сервисов.'
+
+    ask_yes_no 'Перестать раздавать IPv6 клиентам?' yes || {
+        log 'IPv6 оставлен как есть.'
+        return 0
+    }
+
+    uci_set_required dhcp.lan.ra disabled
+    uci_set_required dhcp.lan.dhcpv6 disabled
+    uci_delete dhcp.lan.ra_flags
+    uci_delete dhcp.lan.ra_slaac
+    uci_delete network.lan.ip6assign
+    run uci commit dhcp
+    run uci commit network
+
+    if [ "$DRY_RUN" -eq 0 ]; then
+        /etc/init.d/odhcpd restart >/dev/null 2>&1 || \
+            warn 'odhcpd не перезапустился, анонсы прекратятся после перезагрузки.'
+    fi
+
+    log 'Анонсы IPv6 выключены. Выданные ранее адреса отпадут у клиентов сами.'
+}

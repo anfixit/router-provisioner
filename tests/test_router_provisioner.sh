@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.5.0'
+VERSION='2.6.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -784,6 +784,41 @@ test_maintenance_runs_at_night() {
         'NetShift own subscription job duplicates the helper that can roll back'
 }
 
+test_half_working_ipv6_is_withdrawn() {
+    netshift=$(cat "$PROJECT_DIR/lib/netshift.sh")
+    entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
+
+    # NetShift routes IPv4 only. A LAN that still advertises IPv6 gives clients
+    # an address nothing forwards, and Happy Eyeballs makes every app try it
+    # first and wait out the timeout - random multi-second hangs.
+    assert_contains "$netshift" 'configure_ipv6_advertisement' \
+        'a LAN advertising unusable IPv6 must be detected'
+    assert_contains "$netshift" 'lan_advertises_ipv6' \
+        'the check must look at what the LAN actually advertises'
+    assert_contains "$netshift" 'Перестать раздавать IPv6 клиентам?' \
+        'withdrawing IPv6 must be offered, not forced'
+    assert_contains "$entrypoint" 'configure_ipv6_advertisement' \
+        'the IPv6 step must run as part of the NetShift block'
+
+    DRY_RUN=0
+    uci() { return 1; }
+    assert_false 'a LAN with nothing configured does not advertise IPv6' \
+        lan_advertises_ipv6
+    unset -f uci 2>/dev/null || true
+}
+
+test_readiness_checks_policy_route() {
+    boot=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
+
+    # A network or firewall reload drops the policy routing rule while leaving
+    # the process, the nftables table and the tproxy rules in place: every
+    # surface check passes and not one proxied site opens.
+    assert_contains "$boot" 'policy_route_present' \
+        'readiness must verify the policy routing rule'
+    assert_contains "$boot" "lookup netshift" \
+        'the rule is what actually delivers marked packets to sing-box'
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -826,5 +861,7 @@ test_uci_helpers_do_not_clobber_caller_variables
 test_unconfigured_proxy_sections_are_removed
 test_default_topology_routes_by_list
 test_maintenance_runs_at_night
+test_half_working_ipv6_is_withdrawn
+test_readiness_checks_policy_route
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

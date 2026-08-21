@@ -95,11 +95,21 @@ resolver_answers() {
     return 1
 }
 
+# Marked packets reach sing-box only through a policy routing rule. Anything
+# that reloads the network - "/etc/init.d/network restart", a firewall reload -
+# drops that rule while leaving the nftables table, the tproxy rules and the
+# process itself untouched. Every surface check then looks healthy while no
+# proxied site opens, so check the rule explicitly.
+policy_route_present() {
+    ip rule show 2>/dev/null | grep -q 'lookup netshift'
+}
+
 service_ready() {
     pgrep -f '[s]ing-box run' >/dev/null 2>&1 || return 1
     [ -s /etc/sing-box/config.json ] || return 1
     /usr/bin/sing-box check -c /etc/sing-box/config.json \
         >/dev/null 2>&1 || return 1
+    policy_route_present || return 1
     resolver_answers
 }
 
