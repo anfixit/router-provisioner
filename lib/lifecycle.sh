@@ -4,6 +4,7 @@
 BOOT_HELPER='/usr/bin/router-provisioner-netshift-start'
 REFRESH_HELPER='/usr/bin/router-provisioner-netshift-refresh'
 BOOT_SERVICE='/etc/init.d/router-provisioner-netshift'
+UPGRADE_HELPER='/usr/bin/router-provisioner-upgrade'
 
 install_lifecycle_helpers() {
     runtime_dir=${ROUTER_PROVISIONER_RUNTIME_DIR:-}
@@ -23,6 +24,11 @@ install_lifecycle_helpers() {
         "$REFRESH_HELPER" || fatal 'Failed to copy NetShift refresh helper.'
     chmod 700 "$REFRESH_HELPER" || \
         fatal 'Failed to set permissions on NetShift refresh helper.'
+
+    cp "$runtime_dir/router-provisioner-upgrade" \
+        "$UPGRADE_HELPER" || fatal 'Failed to copy the upgrade helper.'
+    chmod 700 "$UPGRADE_HELPER" || \
+        fatal 'Failed to set permissions on the upgrade helper.'
 
     cat > "$BOOT_SERVICE" <<'EOF_SERVICE'
 #!/bin/sh /etc/rc.common
@@ -54,7 +60,7 @@ EOF_SERVICE
     mkdir -p /etc/crontabs
     touch /etc/crontabs/root
     temporary="/tmp/router-provisioner-cron.$$"
-    grep -v 'router-provisioner-netshift-refresh' \
+    grep -vE 'router-provisioner-netshift-refresh|router-provisioner-upgrade' \
         /etc/crontabs/root > "$temporary" || true
     {
         cat "$temporary"
@@ -67,6 +73,9 @@ EOF_SERVICE
         # asks the user to log in again. Twenty-four of those a day is a lot of
         # noise for a subscription that changes once in a while.
         printf '0 3 * * * %s\n' "$REFRESH_HELPER"
+        # After the subscription refresh, so a component upgrade lands on a
+        # configuration that is already current.
+        printf '45 3 * * * %s\n' "$UPGRADE_HELPER"
     } > /etc/crontabs/root
     rm -f "$temporary"
     chmod 600 /etc/crontabs/root

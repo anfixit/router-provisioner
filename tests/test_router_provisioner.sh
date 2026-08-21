@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.6.0'
+VERSION='2.7.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -819,6 +819,33 @@ test_readiness_checks_policy_route() {
         'the rule is what actually delivers marked packets to sing-box'
 }
 
+test_component_upgrade_is_scheduled_and_quiet() {
+    upgrade=$(cat "$PROJECT_DIR/runtime/router-provisioner-upgrade")
+    lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
+    launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
+
+    # An outdated sing-box does not report itself - it looks like a subscription
+    # where every node is unreachable, while the same nodes answer fine from
+    # any other client.
+    assert_contains "$upgrade" 'check_update' \
+        'the upgrade must ask NetShift what the current version is'
+    assert_contains "$upgrade" 'install_extended' \
+        'an outdated sing-box must actually be upgraded'
+    # Restarting when nothing changed drops the pinned node for no reason.
+    assert_contains "$upgrade" "if [ \"\$status\" = 'latest' ]; then" \
+        'an already current component must not trigger a restart'
+    assert_contains "$upgrade" 'restore_pinned_nodes' \
+        'an upgrade restart must put the pinned nodes back'
+    # NetShift own installer is interactive and can reset the configuration.
+    assert_contains "$upgrade" 'upgrade it by hand' \
+        'NetShift itself must be reported, not upgraded unattended'
+
+    assert_contains "$lifecycle" 'router-provisioner-upgrade' \
+        'the upgrade helper must be installed and scheduled'
+    assert_contains "$launcher" 'router-provisioner-upgrade' \
+        'the launcher must download the upgrade helper'
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -863,5 +890,6 @@ test_default_topology_routes_by_list
 test_maintenance_runs_at_night
 test_half_working_ipv6_is_withdrawn
 test_readiness_checks_policy_route
+test_component_upgrade_is_scheduled_and_quiet
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

@@ -1,0 +1,117 @@
+#!/bin/ash
+# Nightly component upgrade.
+#
+# An outdated sing-box does not fail loudly - it fails as a dead subscription.
+# Every node showed unreachable on the router while the same nodes answered
+# fine from a phone on the same account, and the only thing wrong was a
+# sing-box a few releases behind what the provider's nodes now expect. Nothing
+# in NetShift's own diagnostics points at the version, so the owner is left
+# hunting a network problem that does not exist. Keep the component current.
+#
+# NetShift itself is only reported, never upgraded here: its installer asks
+# questions and can reset the configuration, which is not something to do
+# unattended at three in the morning.
+set -u
+
+TAG='router-provisioner-upgrade'
+LOCK='/tmp/router-provisioner-upgrade.lock'
+PIN_HELPER='/usr/bin/router-provisioner-pin'
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+cleanup() {
+    rmdir "$LOCK" 2>/dev/null || true
+}
+
+trap cleanup 0 HUP INT TERM
+
+command -v jq >/dev/null 2>&1 || exit 0
+[ -x /usr/bin/netshift ] || exit 0
+
+mkdir "$LOCK" 2>/dev/null || exit 0
+
+component_field() {
+    /usr/bin/netshift component_action "$1" check_update 2>/dev/null | \
+        jq -r "$2 // empty" 2>/dev/null
+}
+
+sing_box_version() {
+    /usr/bin/sing-box version 2>/dev/null | head -n 1 | awk '{print $3}'
+}
+
+# A restart drops whatever node the selectors were pinned to, so put them back
+# immediately rather than leaving a gap until the next cron minute.
+restore_pinned_nodes() {
+    [ -x "$PIN_HELPER" ] || return 0
+    "$PIN_HELPER" >/dev/null 2>&1 || true
+}
+
+# Returns 0 only when a new build was actually installed. Anything else - no
+# answer, already current, a failed install - returns non-zero so the caller
+# does not restart NetShift for nothing: a needless restart drops the pinned
+# node and every long-lived connection with it.
+upgrade_sing_box() {
+    status=$(component_field sing_box '.status')
+    if [ -z "$status" ]; then
+        log 'sing-box: update check gave no answer, skipping'
+        return 1
+    fi
+
+    if [ "$status" = 'latest' ]; then
+        return 1
+    fi
+
+    latest=$(component_field sing_box '.latest_version')
+    before=$(sing_box_version)
+    log "sing-box: ${before:-unknown} is behind ${latest:-newer}, upgrading"
+
+    if ! /usr/bin/netshift component_action sing_box install_extended \
+        >/dev/null 2>&1; then
+        log 'sing-box: upgrade command failed, keeping the current build'
+        return 1
+    fi
+
+    after=$(sing_box_version)
+    if [ "$after" = "$before" ]; then
+        log "sing-box: still $after after the upgrade, nothing changed"
+        return 1
+    fi
+
+    log "sing-box: upgraded to $after"
+    return 0
+}
+
+# Restarting NetShift is what actually puts the new binary in service; the
+# upgrade only replaces the file on disk.
+restart_and_verify() {
+    /etc/init.d/netshift restart >/dev/null 2>&1 || true
+
+    attempt=0
+    while [ "$attempt" -lt 30 ]; do
+        if pgrep -f '[s]ing-box run' >/dev/null 2>&1 && \
+            /usr/bin/sing-box check -c /etc/sing-box/config.json \
+                >/dev/null 2>&1; then
+            log 'NetShift is healthy after the upgrade'
+            restore_pinned_nodes
+            return 0
+        fi
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    log 'NetShift did not come back after the upgrade; check it by hand'
+    return 1
+}
+
+if upgrade_sing_box; then
+    restart_and_verify || true
+fi
+
+netshift_status=$(component_field netshift '.status')
+if [ -n "$netshift_status" ] && [ "$netshift_status" != 'latest' ]; then
+    log "netshift: $(component_field netshift '.latest_version') is available; upgrade it by hand"
+fi
+
+exit 0
