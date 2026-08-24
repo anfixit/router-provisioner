@@ -167,6 +167,26 @@ configure_pinned_sections() {
     log "Настроено сервисов с фиксированным узлом: $PINNED_COUNT"
 }
 
+# The pin helper runs every minute, and busybox crond announces every job it
+# starts. That is 1440 lines a day into a 128 KB ring buffer held in RAM, which
+# leaves barely eight hours of history - and nothing on disk. The first time an
+# intermittent fault was investigated, the whole window had already been
+# overwritten by the announcements of the helper meant to prevent such faults.
+# Silence the announcements and give the buffer room, so the next fault is still
+# visible when someone comes looking.
+keep_log_buffer_usable() {
+    _log_before=$CONFIG_CHANGED
+
+    uci_set_required 'system.@system[0].cronloglevel' '9'
+    uci_set_required 'system.@system[0].log_size' '512'
+
+    [ "$CONFIG_CHANGED" -gt "$_log_before" ] || return 0
+
+    run uci commit system
+    run /etc/init.d/log restart >/dev/null 2>&1 || \
+        warn 'Не удалось перезапустить log; размер буфера применится после перезагрузки.'
+}
+
 install_pin_helper() {
     runtime_dir=${ROUTER_PROVISIONER_RUNTIME_DIR:-}
 
@@ -185,6 +205,8 @@ install_pin_helper() {
         return 0
     }
     chmod 700 "$PIN_HELPER"
+
+    keep_log_buffer_usable
 
     mkdir -p /etc/crontabs
     touch /etc/crontabs/root

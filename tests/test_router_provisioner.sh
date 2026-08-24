@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.7.0'
+VERSION='2.7.1'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -846,6 +846,23 @@ test_component_upgrade_is_scheduled_and_quiet() {
         'the launcher must download the upgrade helper'
 }
 
+test_log_buffer_survives_the_pin_cron() {
+    pinning=$(cat "$PROJECT_DIR/lib/pinning.sh")
+
+    # The pin helper runs every minute. busybox crond announces every job it
+    # starts, so the helper alone writes 1440 lines a day into a ring buffer
+    # that lives in RAM and defaults to 128 KB. An intermittent fault reported
+    # the same evening had already been overwritten by those announcements.
+    assert_contains "$pinning" 'keep_log_buffer_usable' \
+        'installing a per-minute cron must also keep the log readable'
+    assert_contains "$pinning" "'system.@system[0].cronloglevel' '9'" \
+        'crond must stop announcing every run of the pin helper'
+    assert_contains "$pinning" "'system.@system[0].log_size' '512'" \
+        'the ring buffer must hold more than a single evening'
+    assert_contains "$pinning" '/etc/init.d/log restart' \
+        'a new buffer size only takes effect once log is restarted'
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -873,6 +890,7 @@ test_netshift_upgrades_to_latest
 test_github_asset_selection
 test_youtubeunblock_matches_reference
 test_netshift_settings_match_reference
+test_log_buffer_survives_the_pin_cron
 test_youtubeunblock_is_wired_in
 test_subscription_is_optional
 test_netshift_stays_stopped_without_subscription
