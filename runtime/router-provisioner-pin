@@ -27,10 +27,31 @@ LOCK='/tmp/router-provisioner-pin.lock'
 # A single probe is not evidence. Twice in one day the primary failed one check
 # and answered again 55 seconds later; both times the switch away and the switch
 # back cost a signed-in session - connections 83 minutes old, closed for a blip
-# that TCP would have ridden out. So: leave only after FAIL_THRESHOLD checks in
-# a row, and come back only after RECOVER_THRESHOLD, because the return trip
-# kills sessions exactly like the outbound one.
-FAIL_THRESHOLD=3
+# that TCP would have ridden out.
+#
+# Waiting three cron minutes would fix that and leave a real outage unhandled
+# for three minutes, which is its own kind of broken. So the evidence is
+# gathered densely instead of slowly: on the first miss, keep asking every two
+# seconds. A blip answers on the second or third try and nothing moves; a dead
+# node stays silent through the whole burst.
+#
+# Measured on the router: a failing probe comes back at once when the node
+# refuses, and waits out BURST_TIMEOUT when it swallows the packet, so a real
+# outage is confirmed in fifteen to forty seconds. A healthy node answers on the
+# first try and the whole run costs nothing.
+#
+# The line this draws: silence longer than about forty seconds counts as an
+# outage and will move the node, sessions and all. Shorter than that is ridden
+# out.
+BURST_PROBES=8
+BURST_TIMEOUT=3000
+BURST_GAP=2
+
+# Checks that are not about to close anyone's connections stay cheap.
+QUICK_PROBES=2
+
+# The return trip kills sessions exactly like the outbound one, and nothing is
+# broken while it waits, so it stays lazy.
 RECOVER_THRESHOLD=5
 
 log() {
@@ -101,22 +122,36 @@ resolve_node() {
 probe_once() {
     curl -s -m 12 -G \
         "$1/proxies/$(urlencode "$2")/delay" \
-        --data "timeout=$TIMEOUT" \
+        --data "timeout=$3" \
         --data-urlencode "url=$TEST_URL" \
         2>/dev/null | jq -r '.delay // empty' 2>/dev/null
 }
 
-# Three probes, because a single dropped packet is not a dead node. The first
-# version asked once, and one unlucky answer was enough to move the node and
-# close every connection on it.
-node_is_alive() {
-    for _ in 1 2 3; do
-        delay=$(probe_once "$1" "$2")
+# Ask up to <attempts> times, stopping at the first answer. A healthy node
+# answers on the first try in a fifth of a second, so the burst only costs
+# anything when something is actually wrong.
+node_answers() {
+    _pa_base=$1
+    _pa_node=$2
+    _pa_attempts=$3
+    _pa_timeout=$4
+    _pa_gap=$5
+    _pa_try=0
+
+    while [ "$_pa_try" -lt "$_pa_attempts" ]; do
+        _pa_try=$((_pa_try + 1))
+
+        delay=$(probe_once "$_pa_base" "$_pa_node" "$_pa_timeout")
         if [ -n "$delay" ] && [ "$delay" -gt 0 ] 2>/dev/null; then
+            PROBE_TRIES=$_pa_try
             return 0
         fi
+
+        [ "$_pa_try" -lt "$_pa_attempts" ] && [ "$_pa_gap" -gt 0 ] && \
+            sleep "$_pa_gap"
     done
 
+    PROBE_TRIES=$_pa_try
     return 1
 }
 
@@ -144,6 +179,8 @@ select_node() {
         "$1/proxies/$(urlencode "$2")" 2>/dev/null
 }
 
+PROBE_TRIES=0
+
 BASE=$(api_base) || exit 0
 
 grep -v '^[[:space:]]*#' "$PINNED_FILE" | \
@@ -159,55 +196,54 @@ grep -v '^[[:space:]]*#' "$PINNED_FILE" | \
             continue
         fi
 
-        fails=$(state_field "$group" 2)
         oks=$(state_field "$group" 3)
-        [ -n "$fails" ] || fails=0
         [ -n "$oks" ] || oks=0
 
-        if node_is_alive "$BASE" "$primary"; then
-            fails=0
-            oks=$((oks + 1))
-
-            if [ "$now" != "$primary" ] && \
-                [ "$oks" -ge "$RECOVER_THRESHOLD" ]; then
-                select_node "$BASE" "$group" "$primary"
-                log "$group: primary steady for $oks checks, switched back to $primary"
+        # On the reserve already: nothing is at stake in this check, so keep it
+        # cheap and let RECOVER_THRESHOLD do the deciding.
+        if [ "$now" != "$primary" ]; then
+            if node_answers "$BASE" "$primary" "$QUICK_PROBES" "$TIMEOUT" 1; then
+                oks=$((oks + 1))
+                if [ "$oks" -ge "$RECOVER_THRESHOLD" ]; then
+                    select_node "$BASE" "$group" "$primary"
+                    log "$group: primary steady for $oks checks, switched back to $primary"
+                    oks=0
+                fi
+            else
                 oks=0
             fi
 
-            state_store "$group" "$fails" "$oks"
+            state_store "$group" 0 "$oks"
             continue
         fi
 
-        oks=0
-        fails=$((fails + 1))
-
-        # The primary is down. Move to the reserve, but only once it has missed
-        # enough checks to mean it, and only if the reserve works - switching to
-        # a second dead node would just hide the real problem.
-        if [ "$now" != "$primary" ] || [ "$fails" -lt "$FAIL_THRESHOLD" ]; then
-            [ "$now" = "$primary" ] && \
-                log "$group: primary missed check $fails of $FAIL_THRESHOLD, holding"
-            state_store "$group" "$fails" "$oks"
+        # On the primary. A miss here is about to cost every connection on it,
+        # so keep asking for about forty seconds before believing it.
+        if node_answers "$BASE" "$primary" "$BURST_PROBES" "$BURST_TIMEOUT" \
+            "$BURST_GAP"; then
+            [ "$PROBE_TRIES" -gt 1 ] && \
+                log "$group: primary missed $((PROBE_TRIES - 1)), answered on try $PROBE_TRIES, staying"
+            state_store "$group" 0 0
             continue
         fi
 
         reserve=$(resolve_node "$BASE" "$group" "$reserve_keyword")
         if [ -z "$reserve" ]; then
             log "$group: primary is down and no reserve is configured"
-            state_store "$group" "$fails" "$oks"
+            state_store "$group" 0 0
             continue
         fi
 
-        if node_is_alive "$BASE" "$reserve"; then
+        # If the reserve is silent too, the uplink is down, not the node -
+        # switching would cost every connection and fix nothing.
+        if node_answers "$BASE" "$reserve" "$QUICK_PROBES" "$TIMEOUT" 1; then
             select_node "$BASE" "$group" "$reserve"
-            log "$group: primary down for $fails checks, switched to $reserve"
-            fails=0
+            log "$group: primary silent for $PROBE_TRIES probes, switched to $reserve"
         else
-            log "$group: primary and reserve are both down, staying put"
+            log "$group: primary and reserve are both silent, staying put"
         fi
 
-        state_store "$group" "$fails" "$oks"
+        state_store "$group" 0 0
     done
 
 exit 0

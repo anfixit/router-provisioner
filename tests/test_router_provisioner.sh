@@ -680,15 +680,17 @@ test_pin_helper_contract() {
         'this BusyBox has no od, so only spaces may be escaped'
 
     # Switching a selector closes every connection on the old node and shows the
-    # service a new exit address. One unlucky probe must never cost a session:
-    # the primary answered again 55 seconds after both switches that dropped a
-    # signed-in session, so both were false alarms.
-    assert_contains "$pin" 'for _ in 1 2 3' \
-        'liveness needs three probes, not one'
-    assert_contains "$pin" 'FAIL_THRESHOLD=3' \
-        'failover must wait for repeated failures across runs'
+    # service a new exit address. One unlucky probe must never cost a session -
+    # but neither may a real outage wait three minutes for the cron to agree.
+    # Evidence is gathered densely instead of slowly.
+    assert_contains "$pin" 'BURST_PROBES=8' \
+        'a miss on the primary must be re-asked, not believed'
+    assert_contains "$pin" 'BURST_GAP=2' \
+        'the burst must confirm a real outage in well under a minute'
     assert_contains "$pin" 'RECOVER_THRESHOLD=5' \
-        'the return trip kills sessions too, so it must be lazier than leaving'
+        'the return trip kills sessions too, and nothing is broken while it waits'
+    assert_contains "$pin" 'primary and reserve are both silent' \
+        'a dead uplink must not be mistaken for a dead node'
     assert_contains "$pin" 'state_store' \
         'counters must survive between cron runs'
     assert_not_contains "$pin" 'primary is back, switched to' \
