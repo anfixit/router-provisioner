@@ -15,20 +15,7 @@ install_lifecycle_helpers() {
         return 0
     fi
 
-    cp "$runtime_dir/router-provisioner-netshift-start" \
-        "$BOOT_HELPER" || fatal 'Failed to copy NetShift start helper.'
-    chmod 700 "$BOOT_HELPER" || \
-        fatal 'Failed to set permissions on NetShift start helper.'
-
-    cp "$runtime_dir/router-provisioner-netshift-refresh" \
-        "$REFRESH_HELPER" || fatal 'Failed to copy NetShift refresh helper.'
-    chmod 700 "$REFRESH_HELPER" || \
-        fatal 'Failed to set permissions on NetShift refresh helper.'
-
-    cp "$runtime_dir/router-provisioner-upgrade" \
-        "$UPGRADE_HELPER" || fatal 'Failed to copy the upgrade helper.'
-    chmod 700 "$UPGRADE_HELPER" || \
-        fatal 'Failed to set permissions on the upgrade helper.'
+    copy_lifecycle_helpers "$runtime_dir"
 
     cat > "$BOOT_SERVICE" <<'EOF_SERVICE'
 #!/bin/sh /etc/rc.common
@@ -57,11 +44,24 @@ EOF_SERVICE
     /etc/init.d/netshift disable >/dev/null 2>&1 || true
     "$BOOT_SERVICE" enable || fatal 'Failed to enable NetShift guard service.'
 
+    schedule_nightly_maintenance
+}
+
+schedule_nightly_maintenance() {
     mkdir -p /etc/crontabs
     touch /etc/crontabs/root
     temporary="/tmp/router-provisioner-cron.$$"
+    # NetShift rewrites its own jobs to 09:13 and 09:17 on every restart, so a
+    # crontab we are already rewriting must be corrected here too - otherwise a
+    # re-run leaves the router doing its maintenance in the middle of the day.
+    # Same treatment as the boot helper: drop NetShift's own subscription job,
+    # which the refresh helper does better because it can roll back, and move
+    # the list update to the small hours.
     grep -vE 'router-provisioner-netshift-refresh|router-provisioner-upgrade' \
-        /etc/crontabs/root > "$temporary" || true
+        /etc/crontabs/root | \
+        grep -v '/usr/bin/netshift subscription_update' | \
+        sed 's|^.*/usr/bin/netshift list_update *$|30 3 * * * /usr/bin/netshift list_update|' \
+        > "$temporary" || true
     {
         cat "$temporary"
         # Not :17 - NetShift's own subscription cron lands there for every
@@ -81,4 +81,39 @@ EOF_SERVICE
     chmod 600 /etc/crontabs/root
     /etc/init.d/cron restart >/dev/null 2>&1 || \
         warn 'Cron restart failed; helper is installed but not scheduled.'
+}
+
+copy_lifecycle_helpers() {
+    _lc_runtime=$1
+
+    cp "$_lc_runtime/router-provisioner-netshift-start" \
+        "$BOOT_HELPER" || fatal 'Failed to copy NetShift start helper.'
+    chmod 700 "$BOOT_HELPER" || \
+        fatal 'Failed to set permissions on NetShift start helper.'
+
+    cp "$_lc_runtime/router-provisioner-netshift-refresh" \
+        "$REFRESH_HELPER" || fatal 'Failed to copy NetShift refresh helper.'
+    chmod 700 "$REFRESH_HELPER" || \
+        fatal 'Failed to set permissions on NetShift refresh helper.'
+
+    cp "$_lc_runtime/router-provisioner-upgrade" \
+        "$UPGRADE_HELPER" || fatal 'Failed to copy the upgrade helper.'
+    chmod 700 "$UPGRADE_HELPER" || \
+        fatal 'Failed to set permissions on the upgrade helper.'
+}
+
+# A router that already runs the guard must pick up fixes on a re-run even when
+# the owner declines the install question - they are declining a change of
+# setup, not asking to keep a stale helper. Only the files and the schedule are
+# touched here; what is enabled and what is running stays as the owner left it.
+refresh_lifecycle_helpers() {
+    [ -x "$BOOT_SERVICE" ] || return 0
+    [ "$DRY_RUN" -eq 0 ] || return 0
+
+    runtime_dir=${ROUTER_PROVISIONER_RUNTIME_DIR:-}
+    [ -n "$runtime_dir" ] || return 0
+
+    log 'Сторожевой запуск уже установлен, обновляю хелперы и расписание.'
+    copy_lifecycle_helpers "$runtime_dir"
+    schedule_nightly_maintenance
 }

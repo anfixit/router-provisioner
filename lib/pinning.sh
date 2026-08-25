@@ -123,20 +123,37 @@ $domain"
     fi
 }
 
+# Re-running the provisioner on a router that is already pinned has to deliver
+# fixes without making the owner retype every service. The helper is where the
+# failover logic lives, so a router left on an old copy keeps the old behaviour:
+# that is how a one-probe failover would have outlived the release that fixed
+# it. Refresh it whenever a pinned file exists, whatever the owner answers.
+refresh_pinned_helper() {
+    [ -s "$PINNED_FILE" ] || return 0
+
+    log 'Фиксированные узлы уже настроены, обновляю helper и его расписание.'
+    install_pin_helper
+}
+
 configure_pinned_sections() {
     printf '\n'
     log 'Отдельный узел под сервис нужен там, где смена страны выхода ломает'
     log 'работу: Anthropic, банки, сервисы с проверкой геолокации.'
 
     ask_yes_no 'Направить отдельные сервисы через фиксированные узлы?' no || {
-        log 'Фиксированные узлы пропущены.'
+        log 'Настройка фиксированных узлов пропущена.'
+        refresh_pinned_helper
         return 0
     }
 
+    # Collect into a staging file. The previous version emptied the real one
+    # before asking anything, so answering "yes" and then pressing Enter at the
+    # first prompt wiped a working configuration.
+    staged="$PINNED_DIR/.pinned.$$"
     if [ "$DRY_RUN" -eq 0 ]; then
         mkdir -p "$PINNED_DIR"
-        : > "$PINNED_FILE"
-        chmod 600 "$PINNED_FILE"
+        : > "$staged"
+        chmod 600 "$staged"
     fi
 
     PINNED_COUNT=0
@@ -150,7 +167,7 @@ configure_pinned_sections() {
 
         if [ "$DRY_RUN" -eq 0 ]; then
             printf '%s-out|%s|%s\n' \
-                "$PIN_SECTION" "$PIN_PRIMARY" "$PIN_RESERVE" >> "$PINNED_FILE"
+                "$PIN_SECTION" "$PIN_PRIMARY" "$PIN_RESERVE" >> "$staged"
         fi
 
         log "Секция $PIN_SECTION настроена."
@@ -158,9 +175,13 @@ configure_pinned_sections() {
     done
 
     if [ "$PINNED_COUNT" -eq 0 ]; then
-        log 'Ни один сервис не задан.'
+        log 'Ни один сервис не задан, прежние настройки оставлены как были.'
+        [ "$DRY_RUN" -eq 0 ] && rm -f "$staged"
+        refresh_pinned_helper
         return 0
     fi
+
+    [ "$DRY_RUN" -eq 0 ] && mv "$staged" "$PINNED_FILE"
 
     run uci commit netshift
     install_pin_helper

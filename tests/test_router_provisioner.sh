@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.8.1'
+VERSION='2.8.2'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -883,6 +883,46 @@ test_log_buffer_survives_the_pin_cron() {
         'a new buffer size only takes effect once log is restarted'
 }
 
+test_rerun_delivers_fixes_without_reanswering() {
+    pinning=$(cat "$PROJECT_DIR/lib/pinning.sh")
+    lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
+    entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
+
+    # Declining a step means declining a change of setup, not asking to keep a
+    # stale helper. The helpers carry the failover and upgrade logic, so a
+    # router left on an old copy keeps old bugs through every later release.
+    assert_contains "$pinning" 'refresh_pinned_helper' \
+        'a pinned router must get helper fixes whatever the owner answers'
+    assert_contains "$lifecycle" 'refresh_lifecycle_helpers' \
+        'a guarded router must get helper fixes whatever the owner answers'
+    assert_contains "$entrypoint" 'refresh_lifecycle_helpers' \
+        'the declined branch must still refresh what is already installed'
+
+    # Answering yes and then pressing Enter at the first prompt used to empty
+    # the pinned file before a single service had been entered.
+    assert_contains "$pinning" 'staged="$PINNED_DIR/.pinned.$$"' \
+        'services must be collected aside, not written over the live file'
+    assert_not_contains "$pinning" ': > "$PINNED_FILE"' \
+        'the live pinned file must never be emptied before it can be replaced'
+    assert_contains "$pinning" 'прежние настройки оставлены как были' \
+        'an empty answer must leave the existing pinning alone'
+
+    # Refreshing must not silently re-enable or restart what the owner turned
+    # off; only files and schedule are ours to maintain.
+    assert_contains "$lifecycle" 'copy_lifecycle_helpers' \
+        'the file copy must be reusable by both install and refresh'
+    assert_contains "$lifecycle" 'schedule_nightly_maintenance' \
+        'the schedule must be reusable by both install and refresh'
+
+    # NetShift puts its own jobs back at 09:13 and 09:17 on every restart. A
+    # crontab we are already rewriting must be corrected, or a re-run leaves the
+    # router doing maintenance in the middle of the working day.
+    assert_contains "$lifecycle" '30 3 * * * /usr/bin/netshift list_update' \
+        'a re-run must move the list update back to the small hours'
+    assert_contains "$lifecycle" "grep -v '/usr/bin/netshift subscription_update'" \
+        'NetShift own subscription job duplicates the helper that can roll back'
+}
+
 test_youtubeunblock_is_wired_in() {
     launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
     entrypoint=$(cat "$PROJECT_DIR/lib/main.sh")
@@ -911,6 +951,7 @@ test_github_asset_selection
 test_youtubeunblock_matches_reference
 test_netshift_settings_match_reference
 test_log_buffer_survives_the_pin_cron
+test_rerun_delivers_fixes_without_reanswering
 test_youtubeunblock_is_wired_in
 test_subscription_is_optional
 test_netshift_stays_stopped_without_subscription
