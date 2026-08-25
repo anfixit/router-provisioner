@@ -14,10 +14,24 @@ set -u
 
 TAG='router-provisioner-pin'
 PINNED_FILE='/etc/router-provisioner/pinned'
+STATE_FILE='/tmp/router-provisioner-pin.state'
 SING_BOX_CONFIG='/etc/sing-box/config.json'
 TEST_URL='https://www.gstatic.com/generate_204'
 TIMEOUT=5000
 LOCK='/tmp/router-provisioner-pin.lock'
+
+# Switching a selector closes every connection that was using the old node, and
+# the service on the other end sees a new exit address. That is the whole cost
+# of a failover, and it is only worth paying when the primary is really gone.
+#
+# A single probe is not evidence. Twice in one day the primary failed one check
+# and answered again 55 seconds later; both times the switch away and the switch
+# back cost a signed-in session - connections 83 minutes old, closed for a blip
+# that TCP would have ridden out. So: leave only after FAIL_THRESHOLD checks in
+# a row, and come back only after RECOVER_THRESHOLD, because the return trip
+# kills sessions exactly like the outbound one.
+FAIL_THRESHOLD=3
+RECOVER_THRESHOLD=5
 
 log() {
     logger -t "$TAG" "$*"
@@ -84,17 +98,39 @@ resolve_node() {
         2>/dev/null | head -n 1
 }
 
-node_is_alive() {
-    base=$1
-    node=$2
-
-    delay=$(curl -s -m 12 -G \
-        "$base/proxies/$(urlencode "$node")/delay" \
+probe_once() {
+    curl -s -m 12 -G \
+        "$1/proxies/$(urlencode "$2")/delay" \
         --data "timeout=$TIMEOUT" \
         --data-urlencode "url=$TEST_URL" \
-        2>/dev/null | jq -r '.delay // empty' 2>/dev/null)
+        2>/dev/null | jq -r '.delay // empty' 2>/dev/null
+}
 
-    [ -n "$delay" ] && [ "$delay" -gt 0 ] 2>/dev/null
+# Three probes, because a single dropped packet is not a dead node. The first
+# version asked once, and one unlucky answer was enough to move the node and
+# close every connection on it.
+node_is_alive() {
+    for _ in 1 2 3; do
+        delay=$(probe_once "$1" "$2")
+        if [ -n "$delay" ] && [ "$delay" -gt 0 ] 2>/dev/null; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Counters survive between cron runs; losing them on reboot is harmless, since
+# a fresh boot starts from the primary anyway.
+state_field() {
+    grep "^$1|" "$STATE_FILE" 2>/dev/null | head -n 1 | cut -d'|' -f"$2"
+}
+
+state_store() {
+    _state_tmp="$STATE_FILE.$$"
+    grep -v "^$1|" "$STATE_FILE" 2>/dev/null > "$_state_tmp" || true
+    printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$_state_tmp"
+    mv "$_state_tmp" "$STATE_FILE"
 }
 
 current_node() {
@@ -123,30 +159,55 @@ grep -v '^[[:space:]]*#' "$PINNED_FILE" | \
             continue
         fi
 
+        fails=$(state_field "$group" 2)
+        oks=$(state_field "$group" 3)
+        [ -n "$fails" ] || fails=0
+        [ -n "$oks" ] || oks=0
+
         if node_is_alive "$BASE" "$primary"; then
-            if [ "$now" != "$primary" ]; then
+            fails=0
+            oks=$((oks + 1))
+
+            if [ "$now" != "$primary" ] && \
+                [ "$oks" -ge "$RECOVER_THRESHOLD" ]; then
                 select_node "$BASE" "$group" "$primary"
-                log "$group: primary is back, switched to $primary"
+                log "$group: primary steady for $oks checks, switched back to $primary"
+                oks=0
             fi
+
+            state_store "$group" "$fails" "$oks"
             continue
         fi
 
-        # The primary is down. Move to the reserve, but only if it works -
-        # switching to a second dead node would just hide the real problem.
-        [ "$now" = "$primary" ] || continue
+        oks=0
+        fails=$((fails + 1))
+
+        # The primary is down. Move to the reserve, but only once it has missed
+        # enough checks to mean it, and only if the reserve works - switching to
+        # a second dead node would just hide the real problem.
+        if [ "$now" != "$primary" ] || [ "$fails" -lt "$FAIL_THRESHOLD" ]; then
+            [ "$now" = "$primary" ] && \
+                log "$group: primary missed check $fails of $FAIL_THRESHOLD, holding"
+            state_store "$group" "$fails" "$oks"
+            continue
+        fi
 
         reserve=$(resolve_node "$BASE" "$group" "$reserve_keyword")
         if [ -z "$reserve" ]; then
             log "$group: primary is down and no reserve is configured"
+            state_store "$group" "$fails" "$oks"
             continue
         fi
 
         if node_is_alive "$BASE" "$reserve"; then
             select_node "$BASE" "$group" "$reserve"
-            log "$group: primary is down, switched to $reserve"
+            log "$group: primary down for $fails checks, switched to $reserve"
+            fails=0
         else
             log "$group: primary and reserve are both down, staying put"
         fi
+
+        state_store "$group" "$fails" "$oks"
     done
 
 exit 0

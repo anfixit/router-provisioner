@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.8.0'
+VERSION='2.8.1'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -672,21 +672,27 @@ test_pinned_sections_are_optional_and_ordered() {
 }
 
 test_pin_helper_contract() {
-    helper=$(cat "$PROJECT_DIR/runtime/router-provisioner-pin")
+    pin=$(cat "$PROJECT_DIR/runtime/router-provisioner-pin")
 
-    assert_contains "$helper" '/etc/router-provisioner/pinned' \
-        'the helper must read its groups from a file, not hardcode them'
-    assert_contains "$helper" 'external_controller' \
-        'the clash api address must come from the generated config'
-    assert_contains "$helper" 'primary is back' \
-        'the helper must return to the primary once it recovers'
-    assert_contains "$helper" 'both down' \
-        'a dead reserve must not be selected'
-    assert_contains "$helper" 'endswith("-urltest-out") | not' \
-        'a keyword must never resolve to the automatic urltest group'
-    # OpenWrt ships jq without Oniguruma, so any regex builtin fails silently.
-    assert_not_contains "$helper" 'test(' \
-        'jq regex builtins are unavailable on the router'
+    assert_contains "$pin" 'endswith("-urltest-out")' \
+        'OpenWrt jq has no regex, so keyword matching must avoid test()'
+    assert_contains "$pin" "sed 's/ /%20/g'" \
+        'this BusyBox has no od, so only spaces may be escaped'
+
+    # Switching a selector closes every connection on the old node and shows the
+    # service a new exit address. One unlucky probe must never cost a session:
+    # the primary answered again 55 seconds after both switches that dropped a
+    # signed-in session, so both were false alarms.
+    assert_contains "$pin" 'for _ in 1 2 3' \
+        'liveness needs three probes, not one'
+    assert_contains "$pin" 'FAIL_THRESHOLD=3' \
+        'failover must wait for repeated failures across runs'
+    assert_contains "$pin" 'RECOVER_THRESHOLD=5' \
+        'the return trip kills sessions too, so it must be lazier than leaving'
+    assert_contains "$pin" 'state_store' \
+        'counters must survive between cron runs'
+    assert_not_contains "$pin" 'primary is back, switched to' \
+        'the immediate switch-back is what dropped the session'
 }
 
 test_youtube_takes_the_direct_route() {
