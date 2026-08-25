@@ -60,6 +60,11 @@ upgrade_sing_box() {
     fi
 
     if [ "$status" = 'latest' ]; then
+        # Say so. A silent run cannot be told apart from a run that never
+        # happened, and the first audit of the nightly window found exactly
+        # that: an empty 03:45 and no way to know whether the helper had
+        # fired. One line a night is cheap; an unanswerable question is not.
+        log "sing-box: $(sing_box_version) is current"
         return 1
     fi
 

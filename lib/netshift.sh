@@ -186,17 +186,29 @@ write_youtube_direct_list() {
     fi
 
     mkdir -p "$(dirname "$YOUTUBE_LIST")"
-    # Heavy media only. The direct route exists to keep video off the
-    # subscription, and video is all that is worth the risk: providers block
-    # YouTube's control-plane API hosts far harder than the CDN, and
-    # youtubeUnblock does not always defeat that. A blocked API host loads the
-    # page but never starts playback - the failure that looks like "YouTube is
-    # broken" while every other check passes. Page and API stay on the proxy.
+    # The page belongs here too, not only the media. Left on the proxy it
+    # reaches Google from whichever country the subscription picked that
+    # minute, so YouTube answers in that country's language and serves that
+    # country's ads - which Google does not sell into Russia at all. The split
+    # was also incoherent: the page arrived from Germany while the video it
+    # described streamed from the owner's own address.
+    #
+    # Measured on the router before this was changed: fetched over the direct
+    # route from a Russian address, www.youtube.com answers 200 with a full
+    # 880 KB document, TLS in 0.12 s, three times out of three. youtubeUnblock
+    # carries the page as reliably as it carries the CDN.
+    #
+    # The control-plane API stays on the proxy, one host excepted: jnn-pa is
+    # YouTube's attestation endpoint, and answering it from a different country
+    # than the page came from is asking to be challenged.
     cat > "$YOUTUBE_LIST" <<'EOF_YOUTUBE'
 googlevideo.com
 ytimg.com
 ggpht.com
 yt3.googleusercontent.com
+youtube.com
+youtu.be
+jnn-pa.googleapis.com
 EOF_YOUTUBE
     chmod 644 "$YOUTUBE_LIST"
 }

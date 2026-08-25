@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.7.1'
+VERSION='2.8.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -689,19 +689,28 @@ test_pin_helper_contract() {
         'jq regex builtins are unavailable on the router'
 }
 
-test_youtube_direct_list_is_media_only() {
+test_youtube_takes_the_direct_route() {
     netshift=$(cat "$PROJECT_DIR/lib/netshift.sh")
 
-    # Only the heavy CDN belongs on the direct route. The control plane is
-    # blocked far harder, and a blocked API loads the page but never starts
-    # playback - the failure that looks like "YouTube is broken" while every
-    # other check passes.
+    # The page must leave from the owner's own address, same as the video it
+    # describes. Left on the proxy it reaches Google from whichever country the
+    # subscription picked, and YouTube answers in that language with that
+    # country's ads - none of which Google sells into Russia.
     assert_contains "$netshift" 'googlevideo.com' \
         'the video CDN must stay on the direct route'
+    assert_contains "$netshift" 'youtu.be' \
+        'short links must follow the page'
+    assert_contains "$netshift" 'jnn-pa.googleapis.com' \
+        'attestation answered from another country invites a challenge'
+
+    # The control plane is blocked far harder than the CDN. A blocked API host
+    # loads the page but never starts playback - the failure that looks like
+    # "YouTube is broken" while every other check passes.
     assert_not_contains "$netshift" 'youtubei.googleapis.com' \
         'the YouTube API must not be routed directly'
     assert_not_contains "$netshift" 'youtubeembeddedplayer.googleapis.com' \
-        'no googleapis host may be routed directly'
+        'the embedded player API must not be routed directly'
+
     assert_contains "$netshift" 'drop_youtube_community_list' \
         'the upstream youtube community list must be removed on re-run'
     assert_not_contains "$netshift" \
@@ -836,6 +845,9 @@ test_component_upgrade_is_scheduled_and_quiet() {
         'an already current component must not trigger a restart'
     assert_contains "$upgrade" 'restore_pinned_nodes' \
         'an upgrade restart must put the pinned nodes back'
+    # A silent run cannot be told apart from a run that never happened.
+    assert_contains "$upgrade" 'is current' \
+        'a nightly run must leave a trace even when there is nothing to do'
     # NetShift own installer is interactive and can reset the configuration.
     assert_contains "$upgrade" 'upgrade it by hand' \
         'NetShift itself must be reported, not upgraded unattended'
@@ -901,7 +913,7 @@ test_configuration_is_reconciled_not_rewritten
 test_declining_a_step_never_aborts_the_run
 test_pinned_sections_are_optional_and_ordered
 test_pin_helper_contract
-test_youtube_direct_list_is_media_only
+test_youtube_takes_the_direct_route
 test_uci_helpers_do_not_clobber_caller_variables
 test_unconfigured_proxy_sections_are_removed
 test_default_topology_routes_by_list
