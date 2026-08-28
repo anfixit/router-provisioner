@@ -3,7 +3,7 @@
 #
 # youtubeUnblock is a DPI-bypass daemon for the YouTube/Google domains that
 # stay on the DIRECT route. It complements NetShift instead of replacing it:
-# NetShift keeps those domains out of the proxy (see YOUTUBE_LIST), and
+# NetShift keeps those domains out of the proxy (see DIRECT_LIST), and
 # youtubeUnblock repairs the TLS handshake for them on the direct path.
 
 YOUTUBEUNBLOCK_REPOSITORY='Waujito/youtubeUnblock'

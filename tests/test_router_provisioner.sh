@@ -194,7 +194,7 @@ EOF_IP_EMPTY
 test_dry_run_redacts_subscriptions() {
     fixture=$(mktemp -d)
     TMP_DIR=$fixture
-    YOUTUBE_LIST="$fixture/youtube.lst"
+    DIRECT_LIST="$fixture/direct.lst"
     DRY_RUN=1
     ASSUME_YES=1
 
@@ -378,7 +378,7 @@ test_youtubeunblock_matches_reference() {
 test_netshift_settings_match_reference() {
     fixture=$(mktemp -d)
     TMP_DIR=$fixture
-    YOUTUBE_LIST="$fixture/youtube.lst"
+    DIRECT_LIST="$fixture/direct.lst"
     DRY_RUN=1
     ASSUME_YES=1
 
@@ -721,6 +721,16 @@ test_youtube_takes_the_direct_route() {
 
     assert_contains "$netshift" 'drop_youtube_community_list' \
         'the upstream youtube community list must be removed on re-run'
+
+    # local_domain_lists is a uci list: pointing at the new name without
+    # removing the old one leaves NetShift reading a file that is gone, which
+    # yields an empty ruleset and sends YouTube back down the tunnel silently.
+    assert_contains "$netshift" 'direct-route.lst' \
+        'the list is named for what it does, not for the first user of it'
+    assert_contains "$netshift" 'migrate_direct_list' \
+        'an existing router must be migrated, not just pointed elsewhere'
+    assert_contains "$netshift" 'uci del_list' \
+        'the stale path must be removed from the uci list'
     assert_not_contains "$netshift" \
         'uci_add_list_once netshift.RU_DIRECT.community_lists youtube' \
         'the youtube community list must not be added back'

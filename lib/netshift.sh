@@ -7,7 +7,10 @@ RUSSIA_OUTSIDE_URL='https://github.com/itdoginfo/allow-domains/releases/latest/d
 BOOT_HELPER='/usr/bin/router-provisioner-netshift-start'
 REFRESH_HELPER='/usr/bin/router-provisioner-netshift-refresh'
 BOOT_SERVICE='/etc/init.d/router-provisioner-netshift'
-YOUTUBE_LIST='/etc/netshift/rulesets/youtube-direct.lst'
+# The list holds everything that leaves without the tunnel, so it is named for
+# that, not for the first thing that needed it.
+DIRECT_LIST='/etc/netshift/rulesets/direct-route.lst'
+LEGACY_DIRECT_LIST='/etc/netshift/rulesets/youtube-direct.lst'
 MAX_SUBSCRIPTIONS=2
 SUBSCRIPTIONS=''
 SUBSCRIPTION_COUNT=0
@@ -181,11 +184,11 @@ $subscription_url"
 
 write_youtube_direct_list() {
     if [ "$DRY_RUN" -eq 1 ]; then
-        log "Был бы создан $YOUTUBE_LIST"
+        log "Был бы создан $DIRECT_LIST"
         return 0
     fi
 
-    mkdir -p "$(dirname "$YOUTUBE_LIST")"
+    mkdir -p "$(dirname "$DIRECT_LIST")"
     # The page belongs here too, not only the media. Left on the proxy it
     # reaches Google from whichever country the subscription picked that
     # minute, so YouTube answers in that country's language and serves that
@@ -201,7 +204,7 @@ write_youtube_direct_list() {
     # The control-plane API stays on the proxy, one host excepted: jnn-pa is
     # YouTube's attestation endpoint, and answering it from a different country
     # than the page came from is asking to be challenged.
-    cat > "$YOUTUBE_LIST" <<'EOF_YOUTUBE'
+    cat > "$DIRECT_LIST" <<'EOF_DIRECT'
 googlevideo.com
 ytimg.com
 ggpht.com
@@ -209,8 +212,8 @@ yt3.googleusercontent.com
 youtube.com
 youtu.be
 jnn-pa.googleapis.com
-EOF_YOUTUBE
-    chmod 644 "$YOUTUBE_LIST"
+EOF_DIRECT
+    chmod 644 "$DIRECT_LIST"
 }
 
 # Reconciles the NetShift configuration instead of rewriting it. Sections are
@@ -336,7 +339,7 @@ find_exclusion_section() {
             continue
 
         if uci_list_contains "netshift.$candidate.local_domain_lists" \
-            "$YOUTUBE_LIST" || \
+            "$DIRECT_LIST" || \
             uci_list_contains "netshift.$candidate.community_lists" youtube; then
             printf '%s\n' "$candidate"
             return 0
@@ -374,7 +377,7 @@ configure_direct_section() {
         log "Секция прямого маршрута уже есть: $existing. Дополняю, не переписываю."
         drop_youtube_community_list "$existing"
         uci_add_list_once "netshift.$existing.local_domain_lists" \
-            "$YOUTUBE_LIST"
+            "$DIRECT_LIST"
         return 0
     fi
 
@@ -387,7 +390,31 @@ configure_direct_section() {
     uci_set_default netshift.YT_DIRECT.global_proxy 0
     uci_set_default netshift.YT_DIRECT.user_domain_list_type disabled
     uci_set_default netshift.YT_DIRECT.user_subnet_list_type disabled
-    uci_add_list_once netshift.YT_DIRECT.local_domain_lists "$YOUTUBE_LIST"
+    migrate_direct_list
+    uci_add_list_once netshift.YT_DIRECT.local_domain_lists "$DIRECT_LIST"
+}
+
+# local_domain_lists is a uci list, so pointing at the new name without removing
+# the old one leaves NetShift reading a file that is no longer there - which
+# yields an empty ruleset and sends YouTube back down the tunnel without saying
+# a word. Drop the stale entry, and carry across whatever the owner had added to
+# the old file by hand.
+migrate_direct_list() {
+    if [ -f "$LEGACY_DIRECT_LIST" ] && [ ! -f "$DIRECT_LIST" ]; then
+        run mv "$LEGACY_DIRECT_LIST" "$DIRECT_LIST"
+    fi
+
+    [ -f "$LEGACY_DIRECT_LIST" ] && run rm -f "$LEGACY_DIRECT_LIST"
+
+    if uci_list_contains netshift.YT_DIRECT.local_domain_lists \
+        "$LEGACY_DIRECT_LIST"; then
+        log "Убираю устаревший путь $LEGACY_DIRECT_LIST из списка."
+        run uci del_list \
+            "netshift.YT_DIRECT.local_domain_lists=$LEGACY_DIRECT_LIST"
+        CONFIG_CHANGED=$((CONFIG_CHANGED + 1))
+    fi
+
+    return 0
 }
 
 # Which domains get a FakeIP depends entirely on the routing topology: with a
