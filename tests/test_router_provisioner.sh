@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.8.2'
+VERSION='2.8.3'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -221,7 +221,7 @@ test_guarded_boot_contract() {
     source=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
     lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
 
-    assert_contains "$source" 'ruleset preflight never succeeded' \
+    assert_contains "$source" 'uplink not reachable after 240 seconds' \
         'uplink readiness timeout is missing'
     assert_not_contains "$source" 'network.interface.wan' \
         'the uplink must not be hardcoded to an interface named wan'
@@ -229,8 +229,8 @@ test_guarded_boot_contract() {
     # readiness must be proven by an actual download, not by the route alone.
     assert_contains "$source" 'verifying reachability' \
         'a bare default route must not be trusted as a ready uplink'
-    assert_contains "$source" 'russia_outside.preflight.srs' \
-        'remote ruleset preflight is missing'
+    assert_contains "$source" 'ping -c 1 -W 2' \
+        'reachability must be proved against a literal address'
     # A stop after list_update wipes /tmp/sing-box/rulesets, and the next
     # start skips regenerating them on an unchanged config hash.
     assert_not_contains "$source" 'prepare_lists' \
@@ -824,6 +824,29 @@ test_half_working_ipv6_is_withdrawn() {
     unset -f uci 2>/dev/null || true
 }
 
+test_uplink_check_survives_fakeip() {
+    boot=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
+
+    # The check used to download a ruleset from GitHub. Once
+    # objects.githubusercontent.com was routed through the proxy - which is what
+    # makes the list update work at all - that name started resolving to a
+    # FakeIP address the router itself cannot reach, so the check failed every
+    # time NetShift was running. The helper then stopped a healthy service and
+    # left the household without a VPN for fifteen hours.
+    assert_not_contains "$boot" 'allow-domains/releases' \
+        'reachability must not depend on a name the proxy may capture'
+    assert_not_contains "$boot" 'download_ruleset_preflight' \
+        'the ruleset download must not be the uplink test'
+    assert_contains "$boot" 'uplink_reachable' \
+        'reachability is proved by literal addresses, which FakeIP cannot touch'
+    assert_contains "$boot" '77.88.8.8' \
+        'at least one probe target must be reachable from Russia'
+
+    # A probe that disagrees with a healthy service is a broken probe.
+    assert_contains "$boot" 'but NetShift is healthy, leaving it alone' \
+        'a failed probe must never stop a service that is up and working'
+}
+
 test_readiness_checks_policy_route() {
     boot=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
 
@@ -968,6 +991,7 @@ test_unconfigured_proxy_sections_are_removed
 test_default_topology_routes_by_list
 test_maintenance_runs_at_night
 test_half_working_ipv6_is_withdrawn
+test_uplink_check_survives_fakeip
 test_readiness_checks_policy_route
 test_component_upgrade_is_scheduled_and_quiet
 

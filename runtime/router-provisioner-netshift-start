@@ -2,9 +2,7 @@
 set -u
 
 TAG='router-provisioner-boot'
-RULESET_URL='https://github.com/itdoginfo/allow-domains/releases/latest/download/russia_outside.srs'
 LOCK='/tmp/router-provisioner-netshift-start.lock'
-PREFLIGHT='/tmp/russia_outside.preflight.srs'
 MAX_WAN_WAIT=240
 MAX_READY_ATTEMPTS=45
 PROBE_DOMAINS='discord.com x.com web.telegram.org rutracker.org instagram.com youtube.com'
@@ -15,7 +13,6 @@ log() {
 
 cleanup() {
     rmdir "$LOCK" 2>/dev/null || true
-    rm -f "$PREFLIGHT"
 }
 
 trap cleanup 0 HUP INT TERM
@@ -52,7 +49,7 @@ wait_for_uplink() {
                 reported=$device
             fi
 
-            if download_ruleset_preflight; then
+            if uplink_reachable; then
                 log "uplink device is $device"
                 return 0
             fi
@@ -65,18 +62,38 @@ wait_for_uplink() {
     return 1
 }
 
-download_ruleset_preflight() {
-    rm -f "$PREFLIGHT"
+# Reachability must be proved without DNS. The previous version downloaded a
+# ruleset from GitHub, and once objects.githubusercontent.com was routed through
+# the proxy - which is what makes the list update work at all - the name started
+# resolving to a FakeIP address. The router's own traffic does not go through
+# tproxy, so that address leads nowhere and the check failed every single time
+# NetShift was running, which is exactly when it runs. The helper then did as it
+# was told and stopped a perfectly healthy service.
+#
+# Literal addresses cannot be captured by FakeIP. Any one of them answering is
+# enough: the question here is only "is there a way out", not "is the whole
+# internet well".
+uplink_reachable() {
+    gateway=$(ip route show default 2>/dev/null | \
+        awk '{for (i = 1; i < NF; i++) if ($i == "via") {print $(i + 1); exit}}')
 
-    if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch -q -O "$PREFLIGHT" "$RULESET_URL"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$PREFLIGHT" "$RULESET_URL"
-    else
-        return 127
-    fi
+    for target in "$gateway" 77.88.8.8 1.1.1.1 8.8.8.8; do
+        [ -n "$target" ] || continue
+        ping -c 1 -W 2 "$target" >/dev/null 2>&1 && return 0
+    done
 
-    [ -s "$PREFLIGHT" ]
+    # ICMP is filtered on some uplinks; a TCP handshake to a literal address
+    # settles it without asking a resolver anything.
+    for target in 77.88.8.8 1.1.1.1; do
+        if command -v uclient-fetch >/dev/null 2>&1; then
+            uclient-fetch -q -T 4 -O /dev/null "http://$target/" 2>/dev/null && \
+                return 0
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q -T 4 -O /dev/null "http://$target/" 2>/dev/null && return 0
+        fi
+    done
+
+    return 1
 }
 
 # Which domains get a FakeIP depends entirely on the routing topology: with a
@@ -135,11 +152,6 @@ attempt_start() {
     wait_for_service
 }
 
-if ! wait_for_uplink; then
-    log 'uplink not usable after 240 seconds; ruleset preflight never succeeded'
-    /etc/init.d/netshift stop >/dev/null 2>&1 || true
-    exit 1
-fi
 
 # Selector choices live in sing-box memory and its cache sits in tmpfs, so a
 # reboot always resets pinned groups to the automatic urltest. Re-pin them now
@@ -177,6 +189,26 @@ retime_netshift_cron() {
 
     rm -f "$corrected"
 }
+
+if ! wait_for_uplink; then
+    log 'uplink not reachable after 240 seconds'
+
+    # Stopping exists for the boot case, where a half-started NetShift can take
+    # DNS and routing down with it. It must never be the answer for a service
+    # that is up and working: a probe that disagrees with a healthy service is
+    # a broken probe, and killing the service turns a false alarm into fifteen
+    # hours without a VPN.
+    if service_ready; then
+        log 'but NetShift is healthy, leaving it alone'
+        retime_netshift_cron
+        restore_pinned_nodes
+        exit 0
+    fi
+
+    log 'and NetShift is not healthy either; stopping it to restore ordinary DNS and routing'
+    /etc/init.d/netshift stop >/dev/null 2>&1 || true
+    exit 1
+fi
 
 if attempt_start; then
     log 'NetShift is ready'
