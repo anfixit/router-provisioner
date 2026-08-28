@@ -5,7 +5,7 @@
 set -eu
 
 PROGRAM='router-provisioner'
-VERSION='2.8.3'
+VERSION='2.9.0'
 REPOSITORY='anfixit/router-provisioner'
 REF=${ROUTER_PROVISIONER_REF:-main}
 RUNTIME_DIR=''
@@ -78,7 +78,8 @@ main() {
         router-provisioner-netshift-start \
         router-provisioner-netshift-refresh \
         router-provisioner-pin \
-        router-provisioner-upgrade; do
+        router-provisioner-upgrade \
+        router-provisioner-report; do
         destination="$RUNTIME_DIR/$helper"
         fetch_file "runtime/$helper" "$destination" || \
             fatal "Не удалось скачать runtime/$helper из ref ${REF}."

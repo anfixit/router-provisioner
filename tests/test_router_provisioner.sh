@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.8.3'
+VERSION='2.9.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -859,6 +859,39 @@ test_readiness_checks_policy_route() {
         'the rule is what actually delivers marked packets to sing-box'
 }
 
+test_router_reports_its_own_health() {
+    report=$(cat "$PROJECT_DIR/runtime/router-provisioner-report")
+    lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
+    launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
+
+    # NetShift was stopped by a broken check and stayed down fifteen hours; the
+    # way it was found out was the owner noticing. The router knew all along.
+    assert_contains "$report" 'router_last_seen_timestamp' \
+        'silence must be detectable, which needs a heartbeat'
+    assert_contains "$report" 'router_policy_route_present' \
+        'the routing rule is invisible to every other check'
+    assert_contains "$report" 'router_pin_respected' \
+        'a group drifting off its primary costs the owner a signed-in session'
+    assert_contains "$report" 'router_component_version' \
+        'an outdated sing-box looks like a dead subscription and nothing else'
+
+    # Delivery must not depend on the thing it reports about.
+    assert_contains "$report" 'for attempt in direct proxy' \
+        'a broken proxy must not take the alarm down with it'
+
+    # Reading the delays sing-box already measured costs nothing; probing 26
+    # nodes every five minutes would not.
+    assert_contains "$report" '.history[-1].delay' \
+        'node health must come from measurements that already exist'
+
+    assert_contains "$lifecycle" "printf '*/5 * * * * %s" \
+        'the report must be scheduled often enough to matter'
+    assert_contains "$lifecycle" 'VERSION_FILE' \
+        'the router must publish its own script version'
+    assert_contains "$launcher" 'router-provisioner-report' \
+        'the launcher must download the report helper'
+}
+
 test_component_upgrade_is_scheduled_and_quiet() {
     upgrade=$(cat "$PROJECT_DIR/runtime/router-provisioner-upgrade")
     lifecycle=$(cat "$PROJECT_DIR/lib/lifecycle.sh")
@@ -993,6 +1026,7 @@ test_maintenance_runs_at_night
 test_half_working_ipv6_is_withdrawn
 test_uplink_check_survives_fakeip
 test_readiness_checks_policy_route
+test_router_reports_its_own_health
 test_component_upgrade_is_scheduled_and_quiet
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

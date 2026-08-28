@@ -1,0 +1,224 @@
+#!/bin/ash
+# Router health report.
+#
+# Routers sit behind NAT, so nothing can scrape them. They describe themselves
+# instead and push the result to a Pushgateway the monitoring server scrapes.
+#
+# Why this exists: NetShift was stopped by a broken uplink check and stayed down
+# for fifteen hours, and the way that was discovered was the owner noticing. The
+# router knew it was down the whole time and had no way to say so.
+#
+# Collection never fails the run. A metric that cannot be read is simply absent,
+# because a report that dies halfway is worse than a report with a gap in it.
+set -u
+
+TAG='router-provisioner-report'
+CONFIG='/etc/router-provisioner/report.conf'
+OUTPUT='/tmp/router-provisioner-metrics.prom'
+SING_BOX_CONFIG='/etc/sing-box/config.json'
+PINNED_FILE='/etc/router-provisioner/pinned'
+LOCK='/tmp/router-provisioner-report.lock'
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+cleanup() {
+    rmdir "$LOCK" 2>/dev/null || true
+}
+
+trap cleanup 0 HUP INT TERM
+
+mkdir "$LOCK" 2>/dev/null || exit 0
+
+# Endpoint and name come from the config file; without one the report is still
+# written locally, which is what makes it inspectable before a server exists.
+ROUTER_NAME=$(uci -q get system.@system[0].hostname 2>/dev/null || printf router)
+PUSH_URL=''
+PUSH_SECRET=''
+[ -r "$CONFIG" ] && . "$CONFIG"
+
+emit() {
+    printf '%s\n' "$*" >> "$OUTPUT"
+}
+
+metric() {
+    # name value [extra labels]
+    if [ -n "${3:-}" ]; then
+        emit "$1{router=\"$ROUTER_NAME\",$3} $2"
+    else
+        emit "$1{router=\"$ROUTER_NAME\"} $2"
+    fi
+}
+
+boolean() {
+    if "$@" >/dev/null 2>&1; then printf 1; else printf 0; fi
+}
+
+api_base() {
+    controller=$(jq -r '.experimental.clash_api.external_controller // empty' \
+        "$SING_BOX_CONFIG" 2>/dev/null)
+
+    for candidate in "$controller" '127.0.0.1:9090'; do
+        [ -n "$candidate" ] || continue
+        if curl -s -m 3 "http://$candidate/version" 2>/dev/null | \
+            grep -q '"version"'; then
+            printf 'http://%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+: > "$OUTPUT"
+
+emit '# HELP router_last_seen_timestamp Unix time this report was produced.'
+emit '# TYPE router_last_seen_timestamp gauge'
+metric router_last_seen_timestamp "$(date +%s)"
+
+# --- service health -------------------------------------------------------
+emit '# TYPE router_singbox_running gauge'
+metric router_singbox_running "$(boolean pgrep -f '[s]ing-box run')"
+
+emit '# TYPE router_config_valid gauge'
+metric router_config_valid \
+    "$(boolean /usr/bin/sing-box check -c "$SING_BOX_CONFIG")"
+
+emit '# TYPE router_policy_route_present gauge'
+if ip rule show 2>/dev/null | grep -q 'lookup netshift'; then
+    metric router_policy_route_present 1
+else
+    metric router_policy_route_present 0
+fi
+
+# --- nodes ----------------------------------------------------------------
+# Read the delays sing-box already measured rather than probing 26 nodes every
+# five minutes: the urltest groups keep that history current for free.
+BASE=$(api_base || printf '')
+if [ -n "$BASE" ]; then
+    proxies=$(curl -s -m 10 "$BASE/proxies" 2>/dev/null)
+
+    if [ -n "$proxies" ]; then
+        total=$(printf '%s' "$proxies" | \
+            jq '[.proxies[] | select(.type == "VLESS" or .type == "Vless")] | length' \
+            2>/dev/null)
+        alive=$(printf '%s' "$proxies" | \
+            jq '[.proxies[] | select(.type == "VLESS" or .type == "Vless")
+                 | select((.history | length) > 0)
+                 | select(.history[-1].delay > 0)] | length' 2>/dev/null)
+
+        emit '# TYPE router_nodes_total gauge'
+        metric router_nodes_total "${total:-0}"
+        emit '# TYPE router_nodes_alive gauge'
+        metric router_nodes_alive "${alive:-0}"
+    fi
+fi
+
+# --- pinning --------------------------------------------------------------
+# The whole point of pinning is that a service keeps one exit address. If the
+# group has drifted off its primary, that is worth knowing before the service
+# on the other end asks the owner to sign in again.
+emit '# TYPE router_pin_respected gauge'
+if [ -s "$PINNED_FILE" ] && [ -n "$BASE" ]; then
+    grep -v '^[[:space:]]*#' "$PINNED_FILE" | \
+        while IFS='|' read -r group primary _reserve; do
+            [ -n "$group" ] || continue
+
+            encoded=$(printf '%s' "$group" | sed 's/ /%20/g')
+            now=$(curl -s -m 5 "$BASE/proxies/$encoded" 2>/dev/null | \
+                jq -r '.now // empty' 2>/dev/null)
+
+            case "$now" in
+                *"$primary"*) respected=1 ;;
+                *)            respected=0 ;;
+            esac
+
+            metric router_pin_respected "$respected" "group=\"$group\""
+        done
+fi
+
+# --- uplink ---------------------------------------------------------------
+emit '# TYPE router_wan_up gauge'
+gateway=$(ip route show default 2>/dev/null | \
+    awk '{for (i = 1; i < NF; i++) if ($i == "via") {print $(i + 1); exit}}')
+if [ -n "$gateway" ] && ping -c 1 -W 2 "$gateway" >/dev/null 2>&1; then
+    metric router_wan_up 1
+else
+    metric router_wan_up 0
+fi
+
+device=$(ip route show default 2>/dev/null | \
+    awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
+if [ -n "$device" ]; then
+    for candidate in "$device" "$(uci -q get network.wan.device)"; do
+        [ -n "$candidate" ] || continue
+        speed=$(cat "/sys/class/net/$candidate/speed" 2>/dev/null)
+        if [ -n "$speed" ] && [ "$speed" -gt 0 ] 2>/dev/null; then
+            emit '# TYPE router_wan_speed_mbits gauge'
+            metric router_wan_speed_mbits "$speed"
+            break
+        fi
+    done
+fi
+
+# --- versions -------------------------------------------------------------
+# An outdated sing-box presents as a subscription where every node is dead, and
+# nothing else points at the version. Report it so the answer is on the screen
+# before the hunt starts.
+emit '# TYPE router_component_version gauge'
+sing_box_version=$(/usr/bin/sing-box version 2>/dev/null | head -n 1 | \
+    awk '{print $3}')
+[ -n "$sing_box_version" ] && \
+    metric router_component_version 1 "name=\"sing-box\",version=\"$sing_box_version\""
+
+# NetShift has no version subcommand; the package database is the only place
+# that knows.
+netshift_version=$( { apk list --installed 2>/dev/null || \
+    opkg list-installed 2>/dev/null; } | \
+    grep -m1 -oE 'luci-app-netshift-[0-9]+\.[0-9]+\.[0-9]+' | \
+    grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+[ -n "$netshift_version" ] && \
+    metric router_component_version 1 "name=\"netshift\",version=\"$netshift_version\""
+
+script_version=$(cat /etc/router-provisioner/version 2>/dev/null)
+[ -n "$script_version" ] && \
+    metric router_component_version 1 "name=\"router-provisioner\",version=\"$script_version\""
+
+# --- machine --------------------------------------------------------------
+emit '# TYPE router_uptime_seconds gauge'
+metric router_uptime_seconds "$(cut -d. -f1 /proc/uptime)"
+
+emit '# TYPE router_mem_available_bytes gauge'
+mem=$(awk '/^MemAvailable:/ {print $2 * 1024; exit}' /proc/meminfo 2>/dev/null)
+[ -n "$mem" ] && metric router_mem_available_bytes "$mem"
+
+# --- delivery -------------------------------------------------------------
+# Try the direct path first. A report that can only leave through the proxy is
+# useless for the failure it exists to catch: a broken proxy would take the
+# alarm down with the thing it was meant to report.
+push_report() {
+    [ -n "$PUSH_URL" ] || return 0
+
+    target="$PUSH_URL/metrics/job/router/instance/$ROUTER_NAME"
+
+    for attempt in direct proxy; do
+        if [ "$attempt" = 'proxy' ]; then
+            set -- --proxy 'http://127.0.0.1:4534'
+        else
+            set --
+        fi
+
+        if curl -s -m 15 --data-binary "@$OUTPUT" \
+            ${PUSH_SECRET:+-H "X-Router-Secret: $PUSH_SECRET"} \
+            "$@" "$target" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+
+    log 'report could not be delivered'
+    return 1
+}
+
+push_report
+exit 0
