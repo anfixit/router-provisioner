@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.9.0'
+VERSION='2.10.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -900,6 +900,20 @@ test_router_reports_its_own_health() {
         'the router must publish its own script version'
     assert_contains "$launcher" 'router-provisioner-report' \
         'the launcher must download the report helper'
+
+    # The bot token is the owner's to place; the provisioner must never carry,
+    # print or commit it, and the proxy endpoint differs between routers - one
+    # binds 127.0.0.1:4534, another 192.168.x.1:2080. Assuming it looks exactly
+    # like "Telegram is blocked".
+    logship=$(cat "$PROJECT_DIR/runtime/router-provisioner-logship")
+    assert_contains "$logship" 'proxy_url' \
+        'the proxy endpoint must be read from the config, not assumed'
+    assert_contains "$logship" 'select(.type=="mixed")' \
+        'the mixed inbound is where the router can reach a blocked API'
+    assert_not_contains "$logship" 'BOT_TOKEN=1' \
+        'no token may ever be baked into the helper'
+    assert_contains "$lifecycle" "printf '0 9 */3 * * %s" \
+        'the archive must be shipped on a schedule'
 }
 
 test_component_upgrade_is_scheduled_and_quiet() {

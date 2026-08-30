@@ -1,0 +1,132 @@
+#!/bin/ash
+# Ship a log archive to Telegram.
+#
+# The router keeps its journal in a ring buffer in RAM. By the time anyone asks
+# "what happened last night" the window is usually gone - a fifteen-hour outage
+# was found by the owner noticing, not by anything the router said. This walks
+# the archive out to a place that keeps it.
+#
+# The bot token is never handled by the provisioner: it lives in CONFIG with
+# 600 permissions, put there by the owner, and is only read here.
+set -u
+
+TAG='router-provisioner-logship'
+CONFIG='/etc/router-provisioner/telegram.conf'
+WORK='/tmp/router-provisioner-logship'
+# The proxy inbound is not always on the same address or port - one router
+# binds 127.0.0.1:4534, another 192.168.x.1:2080 - so ask the config rather
+# than assume. Getting this wrong looks exactly like "Telegram is blocked".
+proxy_url() {
+    endpoint=$(jq -r '.inbounds[]? | select(.type=="mixed") |
+        "\(.listen):\(.listen_port)"' /etc/sing-box/config.json 2>/dev/null | \
+        head -n 1)
+    [ -n "$endpoint" ] || return 1
+    printf 'http://%s\n' "$endpoint"
+}
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+cleanup() {
+    rm -rf "$WORK"
+}
+
+trap cleanup 0 HUP INT TERM
+
+BOT_TOKEN=''
+CHAT_ID=''
+LABEL=''
+[ -r "$CONFIG" ] || { log "no $CONFIG, nothing to do"; exit 0; }
+. "$CONFIG"
+
+[ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] || {
+    log 'BOT_TOKEN or CHAT_ID missing, nothing to do'
+    exit 0
+}
+
+[ -n "$LABEL" ] || LABEL=$(uci -q get system.@system[0].hostname 2>/dev/null || printf router)
+
+rm -rf "$WORK"
+mkdir -p "$WORK" || exit 0
+
+stamp=$(date '+%Y%m%d-%H%M')
+archive="/tmp/${LABEL}-${stamp}.tar.gz"
+
+# The journal first, then the things a journal cannot tell you: what is running
+# now, what the routing actually resolves to, and which versions are installed -
+# the three questions every past investigation started with.
+logread > "$WORK/syslog.txt" 2>/dev/null
+dmesg > "$WORK/kernel.txt" 2>/dev/null
+
+{
+    printf 'label: %s\n' "$LABEL"
+    printf 'date: %s\n' "$(date)"
+    printf 'uptime: %s\n' "$(uptime)"
+    printf '\n[services]\n'
+    printf 'sing-box: %s\n' \
+        "$(pgrep -f '[s]ing-box run' >/dev/null && echo running || echo STOPPED)"
+    printf 'youtubeUnblock: %s\n' \
+        "$(pgrep -f '[y]outubeUnblock' >/dev/null && echo running || echo stopped)"
+    printf 'policy route: %s\n' \
+        "$(ip rule show 2>/dev/null | grep -q 'lookup netshift' && echo present || echo MISSING)"
+    printf 'config valid: %s\n' \
+        "$(/usr/bin/sing-box check -c /etc/sing-box/config.json >/dev/null 2>&1 && echo yes || echo NO)"
+    printf 'nfqueue rules: %s\n' \
+        "$(nft list ruleset 2>/dev/null | grep -c 'queue.*537')"
+
+    printf '\n[versions]\n'
+    printf 'sing-box: %s\n' "$(/usr/bin/sing-box version 2>/dev/null | head -n 1)"
+    printf 'router-provisioner: %s\n' \
+        "$(cat /etc/router-provisioner/version 2>/dev/null || echo unknown)"
+
+    printf '\n[routing]\n'
+    jq -r '.route.rules | to_entries[] |
+        "\(.key): -> \(.value.outbound // .value.action) \(.value.rule_set // "")"' \
+        /etc/sing-box/config.json 2>/dev/null
+
+    printf '\n[schedule]\n'
+    cat /etc/crontabs/root 2>/dev/null
+
+    printf '\n[uplink]\n'
+    ip route show default 2>/dev/null
+} > "$WORK/state.txt" 2>/dev/null
+
+tar czf "$archive" -C "$WORK" . 2>/dev/null || {
+    log 'could not build the archive'
+    exit 0
+}
+
+# One line of caption so a problem is visible without opening anything.
+nodes=$(curl -s -m 8 'http://127.0.0.1:9090/proxies' 2>/dev/null | \
+    jq -r '[.proxies[]? | select(.type=="VLESS")] |
+        "\([.[] | select((.history|length)>0) | select(.history[-1].delay>0)] | length)/\(length)"' \
+    2>/dev/null)
+
+caption=$(printf '%s — %s\nsing-box: %s, узлы: %s, обход: %s' \
+    "$LABEL" "$(date '+%d.%m %H:%M')" \
+    "$(pgrep -f '[s]ing-box run' >/dev/null && echo работает || echo ОСТАНОВЛЕН)" \
+    "${nodes:-неизвестно}" \
+    "$(nft list ruleset 2>/dev/null | grep -c 'queue.*537') правил")
+
+# Direct first: a report that can only leave through the proxy is useless for
+# the outage it exists to describe.
+send() {
+    curl -s -m 120 "$@" \
+        -F "chat_id=$CHAT_ID" \
+        -F "caption=$caption" \
+        -F "document=@$archive" \
+        "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" 2>/dev/null | \
+        grep -q '"ok":true'
+}
+
+if send; then
+    log "archive sent ($(wc -c < "$archive") bytes)"
+elif PROXY=$(proxy_url) && send --proxy "$PROXY"; then
+    log "archive sent through the proxy ($(wc -c < "$archive") bytes)"
+else
+    log 'could not deliver the archive'
+fi
+
+rm -f "$archive"
+exit 0

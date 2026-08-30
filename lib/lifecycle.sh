@@ -6,6 +6,7 @@ REFRESH_HELPER='/usr/bin/router-provisioner-netshift-refresh'
 BOOT_SERVICE='/etc/init.d/router-provisioner-netshift'
 UPGRADE_HELPER='/usr/bin/router-provisioner-upgrade'
 REPORT_HELPER='/usr/bin/router-provisioner-report'
+LOGSHIP_HELPER='/usr/bin/router-provisioner-logship'
 VERSION_FILE='/etc/router-provisioner/version'
 
 install_lifecycle_helpers() {
@@ -59,7 +60,7 @@ schedule_nightly_maintenance() {
     # Same treatment as the boot helper: drop NetShift's own subscription job,
     # which the refresh helper does better because it can roll back, and move
     # the list update to the small hours.
-    grep -vE 'router-provisioner-netshift-refresh|router-provisioner-upgrade|router-provisioner-report' \
+    grep -vE 'router-provisioner-netshift-refresh|router-provisioner-upgrade|router-provisioner-report|router-provisioner-logship' \
         /etc/crontabs/root | \
         grep -v '/usr/bin/netshift subscription_update' | \
         sed 's|^.*/usr/bin/netshift list_update *$|30 3 * * * /usr/bin/netshift list_update|' \
@@ -81,6 +82,9 @@ schedule_nightly_maintenance() {
         # Every five minutes: often enough that a stopped service is noticed
         # while it still matters, rare enough to stay invisible in the log.
         printf '*/5 * * * * %s\n' "$REPORT_HELPER"
+        # Every third morning: the journal lives in RAM and is gone by the time
+        # anyone asks what happened, so walk a copy out to somewhere that keeps it.
+        printf '0 9 */3 * * %s\n' "$LOGSHIP_HELPER"
     } > /etc/crontabs/root
     rm -f "$temporary"
     chmod 600 /etc/crontabs/root
@@ -110,6 +114,11 @@ copy_lifecycle_helpers() {
         "$REPORT_HELPER" || fatal 'Failed to copy the report helper.'
     chmod 700 "$REPORT_HELPER" || \
         fatal 'Failed to set permissions on the report helper.'
+
+    cp "$_lc_runtime/router-provisioner-logship" \
+        "$LOGSHIP_HELPER" || fatal 'Failed to copy the logship helper.'
+    chmod 700 "$LOGSHIP_HELPER" || \
+        fatal 'Failed to set permissions on the logship helper.'
 
     # The router reports its own version, so an outdated router is visible from
     # the monitoring side instead of requiring an ssh session to each one.
