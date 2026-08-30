@@ -221,4 +221,43 @@ push_report() {
 }
 
 push_report
+
+# Self-repair, because the command channel cannot help here. Telegram is blocked
+# on this uplink, so the router only reaches the bot through the tunnel: if the
+# tunnel is down, no instruction can arrive. The guard service runs at boot and
+# nothing else watched the middle of the day - a service that died at noon
+# stayed dead until someone rebooted.
+#
+# Only a service that is actually down is touched, and only after two checks in
+# a row, so a slow start is never mistaken for a corpse.
+DOWN_MARKER='/tmp/router-provisioner-down'
+
+if pgrep -f '[s]ing-box run' >/dev/null 2>&1; then
+    rm -f "$DOWN_MARKER"
+    exit 0
+fi
+
+if [ ! -f "$DOWN_MARKER" ]; then
+    : > "$DOWN_MARKER"
+    log 'sing-box is not running; waiting one cycle before acting'
+    exit 0
+fi
+
+log 'sing-box still down, restarting NetShift'
+/etc/init.d/netshift restart >/dev/null 2>&1
+
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+    if pgrep -f '[s]ing-box run' >/dev/null 2>&1; then
+        rm -f "$DOWN_MARKER"
+        [ -x /usr/bin/router-provisioner-pin ] && \
+            /usr/bin/router-provisioner-pin >/dev/null 2>&1
+        log 'NetShift is back'
+        exit 0
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+done
+
+log 'NetShift did not come back; leaving it for the boot guard'
 exit 0

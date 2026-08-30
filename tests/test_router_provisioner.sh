@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.11.0'
+VERSION='2.12.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -928,6 +928,19 @@ test_router_reports_its_own_health() {
         'no message text may ever reach a shell'
     assert_contains "$lifecycle" "printf '*/2 * * * * %s" \
         'the command channel must be polled often enough to be useful'
+
+    # Where Telegram is blocked the direct attempt never succeeds, so a generous
+    # timeout makes every reply wait out the full clock before falling back.
+    assert_contains "$command" 'DIRECT_TIMEOUT=6' \
+        'the doomed direct attempt must not be paid for in full every time'
+
+    # The command channel cannot rescue a dead tunnel: no tunnel, no Telegram,
+    # no instruction. The guard runs at boot and nothing watched the afternoon.
+    report=$(cat "$PROJECT_DIR/runtime/router-provisioner-report")
+    assert_contains "$report" 'DOWN_MARKER' \
+        'a service that dies at noon must not wait for a reboot'
+    assert_contains "$report" 'waiting one cycle before acting' \
+        'a slow start must not be mistaken for a corpse'
 }
 
 test_component_upgrade_is_scheduled_and_quiet() {

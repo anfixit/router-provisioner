@@ -129,7 +129,7 @@ caption=$(printf '%s — %s\nsing-box: %s, узлы: %s, обход: %s' \
 # Direct first: a report that can only leave through the proxy is useless for
 # the outage it exists to describe.
 send() {
-    curl -s -m 120 "$@" \
+    curl -s -m "${SEND_TIMEOUT:-120}" "$@" \
         -F "chat_id=$CHAT_ID" \
         -F "caption=$caption" \
         -F "document=@$archive" \
@@ -137,7 +137,7 @@ send() {
         grep -q '"ok":true'
 }
 
-if send; then
+if SEND_TIMEOUT=8 send; then
     log "archive sent ($(wc -c < "$archive") bytes)"
 elif PROXY=$(proxy_url) && send --proxy "$PROXY"; then
     log "archive sent through the proxy ($(wc -c < "$archive") bytes)"

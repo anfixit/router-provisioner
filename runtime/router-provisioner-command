@@ -22,6 +22,15 @@ SEEN='/etc/router-provisioner/command-seen'
 LOCK='/tmp/router-provisioner-command.lock'
 MAX_AGE=900
 
+# The direct attempt is kept short. Where Telegram is blocked - which is every
+# Russian uplink this runs on - it never succeeds, and a generous timeout means
+# every single reply waits out the full clock before falling back. Six seconds
+# is long enough for an uplink where it does work and short enough not to be
+# felt where it does not.
+DIRECT_TIMEOUT=6
+PROXY_TIMEOUT=40
+
+
 log() {
     logger -t "$TAG" "$*"
 }
@@ -77,14 +86,14 @@ api() {
     method=$1
     shift
 
-    if curl -s -m 30 "$@" \
+    if curl -s -m "$DIRECT_TIMEOUT" "$@" \
         "https://api.telegram.org/bot${BOT_TOKEN}/${method}" 2>/dev/null | \
         grep -q '"ok":true'; then
         return 0
     fi
 
     PROXY=$(proxy_url) || return 1
-    curl -s -m 30 --proxy "$PROXY" "$@" \
+    curl -s -m "$PROXY_TIMEOUT" --proxy "$PROXY" "$@" \
         "https://api.telegram.org/bot${BOT_TOKEN}/${method}" 2>/dev/null | \
         grep -q '"ok":true'
 }
@@ -93,12 +102,12 @@ fetch_updates() {
     for attempt in direct proxy; do
         if [ "$attempt" = 'proxy' ]; then
             PROXY=$(proxy_url) || return 1
-            set -- --proxy "$PROXY"
+            set -- --proxy "$PROXY" -m "$PROXY_TIMEOUT"
         else
-            set --
+            set -- -m "$DIRECT_TIMEOUT"
         fi
 
-        body=$(curl -s -m 30 "$@" \
+        body=$(curl -s "$@" \
             "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?limit=20&timeout=0" \
             2>/dev/null)
         case "$body" in
