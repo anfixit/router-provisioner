@@ -1,0 +1,211 @@
+#!/bin/ash
+# Take commands from Telegram.
+#
+# Routers sit behind NAT, so nothing can reach in to fix them. The owner can see
+# a problem in the shipped log archive and then has no way to act on it without
+# being on that network. This closes the loop from the inside: the router asks
+# the bot whether anything is waiting, and the connection is always outbound.
+#
+# Two rules make this safe to run unattended:
+#
+#   Only the configured chat is obeyed. A message from anyone else is ignored
+#   without a word, because answering would confirm the router exists.
+#
+#   Only the commands listed below run. Nothing here ever passes text from a
+#   message to a shell - a bot token leaks far too easily to let it mean
+#   "execute anything".
+set -u
+
+TAG='router-provisioner-command'
+CONFIG='/etc/router-provisioner/telegram.conf'
+SEEN='/etc/router-provisioner/command-seen'
+LOCK='/tmp/router-provisioner-command.lock'
+MAX_AGE=900
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+cleanup() {
+    rmdir "$LOCK" 2>/dev/null || true
+}
+
+trap cleanup 0 HUP INT TERM
+
+mkdir "$LOCK" 2>/dev/null || exit 0
+
+BOT_TOKEN=''
+CHAT_ID=''
+LABEL=''
+[ -r "$CONFIG" ] || exit 0
+. "$CONFIG"
+[ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] || exit 0
+[ -n "$LABEL" ] || LABEL=$(uci -q get system.@system[0].hostname 2>/dev/null || printf router)
+
+# Several routers can share one bot, so updates are never confirmed with an
+# offset: confirming would consume a command meant for a different router.
+# Instead each update id is remembered here once it has been handled.
+touch "$SEEN" 2>/dev/null
+chmod 600 "$SEEN" 2>/dev/null
+
+# The Clash API is not always on loopback either - the same assumption that
+# made the proxy look like a blocked Telegram makes the node count come back
+# empty. Ask the config.
+clash_api() {
+    controller=$(jq -r '.experimental.clash_api.external_controller // empty' \
+        /etc/sing-box/config.json 2>/dev/null)
+    for candidate in "$controller" '127.0.0.1:9090'; do
+        [ -n "$candidate" ] || continue
+        if curl -s -m 3 "http://$candidate/version" 2>/dev/null | \
+            grep -q '"version"'; then
+            printf 'http://%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+proxy_url() {
+    endpoint=$(jq -r '.inbounds[]? | select(.type=="mixed") |
+        "\(.listen):\(.listen_port)"' /etc/sing-box/config.json 2>/dev/null | \
+        head -n 1)
+    [ -n "$endpoint" ] || return 1
+    printf 'http://%s\n' "$endpoint"
+}
+
+api() {
+    method=$1
+    shift
+
+    if curl -s -m 30 "$@" \
+        "https://api.telegram.org/bot${BOT_TOKEN}/${method}" 2>/dev/null | \
+        grep -q '"ok":true'; then
+        return 0
+    fi
+
+    PROXY=$(proxy_url) || return 1
+    curl -s -m 30 --proxy "$PROXY" "$@" \
+        "https://api.telegram.org/bot${BOT_TOKEN}/${method}" 2>/dev/null | \
+        grep -q '"ok":true'
+}
+
+fetch_updates() {
+    for attempt in direct proxy; do
+        if [ "$attempt" = 'proxy' ]; then
+            PROXY=$(proxy_url) || return 1
+            set -- --proxy "$PROXY"
+        else
+            set --
+        fi
+
+        body=$(curl -s -m 30 "$@" \
+            "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?limit=20&timeout=0" \
+            2>/dev/null)
+        case "$body" in
+            *'"ok":true'*) printf '%s' "$body"; return 0 ;;
+        esac
+    done
+
+    return 1
+}
+
+reply() {
+    api sendMessage --data-urlencode "chat_id=$CHAT_ID" \
+        --data-urlencode "text=$1" >/dev/null 2>&1
+}
+
+state_report() {
+    printf '%s\n' "$LABEL"
+    printf 'sing-box: %s\n' \
+        "$(pgrep -f '[s]ing-box run' >/dev/null && echo работает || echo ОСТАНОВЛЕН)"
+    printf 'маршрут: %s\n' \
+        "$(ip rule show 2>/dev/null | grep -q 'lookup netshift' && echo есть || echo НЕТ)"
+    printf 'обход: %s правил\n' \
+        "$(nft list ruleset 2>/dev/null | grep -c 'queue.*537')"
+    printf 'узлы: %s\n' \
+        "$(curl -s -m 8 "$(clash_api 2>/dev/null)/proxies" 2>/dev/null | \
+            jq -r '[.proxies[]? | select(.type=="VLESS")] |
+                "\([.[] | select((.history|length)>0) | select(.history[-1].delay>0)] | length)/\(length)"' \
+            2>/dev/null)"
+    printf 'аптайм: %s\n' "$(uptime | sed 's/.*up //; s/,.*load.*//')"
+    printf 'версия: %s\n' \
+        "$(cat /etc/router-provisioner/version 2>/dev/null || echo неизвестна)"
+}
+
+# Everything a repair needs, in the order a repair needs it. Nothing here takes
+# an argument from the message.
+run_fix() {
+    /etc/init.d/netshift restart >/dev/null 2>&1
+
+    attempt=0
+    while [ "$attempt" -lt 30 ]; do
+        pgrep -f '[s]ing-box run' >/dev/null 2>&1 && break
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    [ -x /usr/bin/router-provisioner-netshift-start ] && \
+        /usr/bin/router-provisioner-netshift-start >/dev/null 2>&1
+    [ -x /usr/bin/router-provisioner-pin ] && \
+        /usr/bin/router-provisioner-pin >/dev/null 2>&1
+    /etc/init.d/youtubeUnblock restart >/dev/null 2>&1
+    /etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+updates=$(fetch_updates) || exit 0
+now=$(date +%s)
+
+printf '%s' "$updates" | \
+    jq -r --arg chat "$CHAT_ID" \
+        '.result[]? | select((.message.chat.id | tostring) == $chat) |
+         "\(.update_id)\t\(.message.date)\t\(.message.text // "")"' \
+    2>/dev/null | \
+    while IFS="$(printf '\t')" read -r update_id sent text; do
+        [ -n "$update_id" ] || continue
+        grep -Fxq "$update_id" "$SEEN" 2>/dev/null && continue
+
+        # Anything older than MAX_AGE is history, not an instruction: a command
+        # typed hours ago must not fire when the router comes back online.
+        [ -n "$sent" ] || continue
+        [ $((now - sent)) -lt "$MAX_AGE" ] || {
+            printf '%s\n' "$update_id" >> "$SEEN"
+            continue
+        }
+
+        # Every command carries the label, so one bot can serve several routers
+        # and each answers only for itself.
+        case "$text" in
+            *"$LABEL"*) : ;;
+            *) continue ;;
+        esac
+
+        printf '%s\n' "$update_id" >> "$SEEN"
+
+        case "$text" in
+            /status*)
+                log 'status requested'
+                reply "$(state_report)"
+                ;;
+            /logs*)
+                log 'archive requested'
+                reply "$LABEL: собираю архив"
+                [ -x /usr/bin/router-provisioner-logship ] && \
+                    /usr/bin/router-provisioner-logship >/dev/null 2>&1
+                ;;
+            /fix*)
+                log 'repair requested'
+                reply "$LABEL: чиню, это займёт около минуты"
+                run_fix
+                reply "$(printf 'после починки\n%s' "$(state_report)")"
+                ;;
+            *)
+                reply "$LABEL: знаю /status, /logs и /fix"
+                ;;
+        esac
+    done
+
+# Keep the file from growing without bound; the ids are only needed long enough
+# for Telegram to stop offering the same update.
+tail -n 200 "$SEEN" > "$SEEN.trim" 2>/dev/null && mv "$SEEN.trim" "$SEEN"
+
+exit 0

@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.10.0'
+VERSION='2.11.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -914,6 +914,20 @@ test_router_reports_its_own_health() {
         'no token may ever be baked into the helper'
     assert_contains "$lifecycle" "printf '0 9 */3 * * %s" \
         'the archive must be shipped on a schedule'
+
+    # Nothing can reach a router behind NAT, so it asks. A bot token leaks far
+    # too easily to let a message mean "execute anything".
+    command=$(cat "$PROJECT_DIR/runtime/router-provisioner-command")
+    assert_contains "$command" 'select((.message.chat.id | tostring) == $chat)' \
+        'only the configured chat may be obeyed'
+    assert_contains "$command" 'MAX_AGE' \
+        'a command typed hours ago must not fire on the next boot'
+    assert_contains "$command" 'clash_api' \
+        'the API address must be read from the config, not assumed'
+    assert_not_contains "$command" 'eval' \
+        'no message text may ever reach a shell'
+    assert_contains "$lifecycle" "printf '*/2 * * * * %s" \
+        'the command channel must be polled often enough to be useful'
 }
 
 test_component_upgrade_is_scheduled_and_quiet() {
