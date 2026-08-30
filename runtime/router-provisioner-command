@@ -18,6 +18,7 @@ set -u
 
 TAG='router-provisioner-command'
 CONFIG='/etc/router-provisioner/telegram.conf'
+HUB_CONFIG='/etc/router-provisioner/hub.conf'
 SEEN='/etc/router-provisioner/command-seen'
 LOCK='/tmp/router-provisioner-command.lock'
 MAX_AGE=900
@@ -160,6 +161,33 @@ run_fix() {
     /etc/init.d/youtubeUnblock restart >/dev/null 2>&1
     /etc/init.d/firewall reload >/dev/null 2>&1
 }
+
+# The hub first: it is reachable without the tunnel, so it still answers when
+# Telegram cannot. A task is one word from a fixed list, never a command.
+HUB_URL=''
+HUB_KEY=''
+[ -r "$HUB_CONFIG" ] && . "$HUB_CONFIG"
+
+if [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ]; then
+    task=$(curl -s -m 20 "$HUB_URL/task/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+        tr -d '\r\n')
+    case "$task" in
+        fix)
+            log 'repair requested through the hub'
+            run_fix
+            reply "$(printf 'после починки (задание с сервера)\n%s' "$(state_report)")"
+            ;;
+        logs)
+            log 'archive requested through the hub'
+            [ -x /usr/bin/router-provisioner-logship ] && \
+                /usr/bin/router-provisioner-logship >/dev/null 2>&1
+            ;;
+        status)
+            log 'status requested through the hub'
+            reply "$(state_report)"
+            ;;
+    esac
+fi
 
 updates=$(fetch_updates) || exit 0
 now=$(date +%s)

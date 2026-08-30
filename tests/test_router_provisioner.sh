@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.12.0'
+VERSION='2.13.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -941,6 +941,22 @@ test_router_reports_its_own_health() {
         'a service that dies at noon must not wait for a reboot'
     assert_contains "$report" 'waiting one cycle before acting' \
         'a slow start must not be mistaken for a corpse'
+
+    # Telegram only answers through the tunnel, so it is silent in exactly the
+    # outage worth reporting. The hub sits in the same country as the router and
+    # needs no tunnel at all.
+    assert_contains "$report" 'HUB_CONFIG' \
+        'the router must be able to report where the tunnel is not needed'
+    assert_contains "$command" 'task/$LABEL' \
+        'tasks must be fetched over the path that survives a dead tunnel'
+    assert_contains "$report" '[ -n "$LABEL" ] && ROUTER_NAME=$LABEL' \
+        'reports signed with an unrenamed hostname are indistinguishable'
+
+    hub=$(cat "$PROJECT_DIR/server/router-hub.py")
+    assert_contains "$hub" 'threading.RLock()' \
+        'reading and clearing a task under one lock deadlocks on a plain Lock'
+    assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "none")' \
+        'a task is a word from a fixed list, never a command'
 }
 
 test_component_upgrade_is_scheduled_and_quiet() {

@@ -14,6 +14,7 @@ set -u
 
 TAG='router-provisioner-report'
 CONFIG='/etc/router-provisioner/report.conf'
+HUB_CONFIG='/etc/router-provisioner/hub.conf'
 OUTPUT='/tmp/router-provisioner-metrics.prom'
 SING_BOX_CONFIG='/etc/sing-box/config.json'
 PINNED_FILE='/etc/router-provisioner/pinned'
@@ -37,6 +38,18 @@ ROUTER_NAME=$(uci -q get system.@system[0].hostname 2>/dev/null || printf router
 PUSH_URL=''
 PUSH_SECRET=''
 [ -r "$CONFIG" ] && . "$CONFIG"
+
+# The hub lives in the same country as the router, so this path needs no tunnel
+# - which is the whole reason it exists. Telegram only works through the
+# tunnel, so it is silent in exactly the outage worth reporting.
+HUB_URL=''
+HUB_KEY=''
+LABEL=''
+[ -r "$HUB_CONFIG" ] && . "$HUB_CONFIG"
+
+# A label the owner chose beats a hostname nobody renamed: reports signed
+# "OpenWrt" are indistinguishable from each other the moment there are two.
+[ -n "$LABEL" ] && ROUTER_NAME=$LABEL
 
 emit() {
     printf '%s\n' "$*" >> "$OUTPUT"
@@ -221,6 +234,12 @@ push_report() {
 }
 
 push_report
+
+if [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ]; then
+    curl -s -m 20 --data-binary "@$OUTPUT" \
+        "$HUB_URL/metrics/$ROUTER_NAME?key=$HUB_KEY" >/dev/null 2>&1 || \
+        log 'hub did not take the report'
+fi
 
 # Self-repair, because the command channel cannot help here. Telegram is blocked
 # on this uplink, so the router only reaches the bot through the tunnel: if the
