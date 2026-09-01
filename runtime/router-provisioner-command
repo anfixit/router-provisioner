@@ -44,12 +44,22 @@ trap cleanup 0 HUP INT TERM
 
 mkdir "$LOCK" 2>/dev/null || exit 0
 
+# The two channels are independent and either may be absent. Requiring a bot
+# token before the hub is even consulted locked the one path that survives a
+# dead tunnel behind the one that does not - a router with only the hub
+# configured did nothing at all, silently, every two minutes.
 BOT_TOKEN=''
 CHAT_ID=''
+HUB_URL=''
+HUB_KEY=''
 LABEL=''
-[ -r "$CONFIG" ] || exit 0
-. "$CONFIG"
-[ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] || exit 0
+[ -r "$CONFIG" ] && . "$CONFIG"
+[ -r "$HUB_CONFIG" ] && . "$HUB_CONFIG"
+
+[ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] && TELEGRAM=1 || TELEGRAM=0
+[ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] && HUB=1 || HUB=0
+[ "$TELEGRAM" -eq 1 ] || [ "$HUB" -eq 1 ] || exit 0
+
 [ -n "$LABEL" ] || LABEL=$(uci -q get system.@system[0].hostname 2>/dev/null || printf router)
 
 # Several routers can share one bot, so updates are never confirmed with an
@@ -120,6 +130,7 @@ fetch_updates() {
 }
 
 reply() {
+    [ "$TELEGRAM" -eq 1 ] || return 0
     api sendMessage --data-urlencode "chat_id=$CHAT_ID" \
         --data-urlencode "text=$1" >/dev/null 2>&1
 }
@@ -162,13 +173,52 @@ run_fix() {
     /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
+# Applying a pushed configuration. Deliberately one setting - which routing
+# lists the proxy section uses - because a leaked key must not become a way to
+# reconfigure someone else's network. Every name is checked against what this
+# NetShift build actually knows before anything is written; an unknown name
+# means the whole push is refused rather than half-applied.
+apply_lists() {
+    [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] || return 1
+
+    wanted=$(curl -s -m 20 "$HUB_URL/config/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+        tr -d '\r' | tr '\n' ' ')
+    [ -n "$wanted" ] || return 1
+
+    known=$(sed -n 's/^COMMUNITY_SERVICES="\(.*\)"/\1/p' \
+        /usr/lib/netshift/constants.sh 2>/dev/null)
+    [ -n "$known" ] || return 1
+
+    for name in $wanted; do
+        case " $known " in
+            *" $name "*) : ;;
+            *) log "refusing push: $name is not a list NetShift knows"; return 1 ;;
+        esac
+    done
+
+    uci -q delete netshift.VPN.community_lists 2>/dev/null || true
+    for name in $wanted; do
+        uci add_list "netshift.VPN.community_lists=$name"
+    done
+    uci commit netshift
+
+    /etc/init.d/netshift restart >/dev/null 2>&1
+    attempt=0
+    while [ "$attempt" -lt 40 ]; do
+        pgrep -f '[s]ing-box run' >/dev/null 2>&1 && break
+        sleep 3
+        attempt=$((attempt + 1))
+    done
+
+    [ -x /usr/bin/router-provisioner-pin ] && \
+        /usr/bin/router-provisioner-pin >/dev/null 2>&1
+
+    return 0
+}
+
 # The hub first: it is reachable without the tunnel, so it still answers when
 # Telegram cannot. A task is one word from a fixed list, never a command.
-HUB_URL=''
-HUB_KEY=''
-[ -r "$HUB_CONFIG" ] && . "$HUB_CONFIG"
-
-if [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ]; then
+if [ "$HUB" -eq 1 ]; then
     task=$(curl -s -m 20 "$HUB_URL/task/$LABEL?key=$HUB_KEY" 2>/dev/null | \
         tr -d '\r\n')
     case "$task" in
@@ -186,8 +236,20 @@ if [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ]; then
             log 'status requested through the hub'
             reply "$(state_report)"
             ;;
+        config)
+            log 'configuration push requested through the hub'
+            if apply_lists; then
+                reply "$(printf 'списки применены: %s\n%s' \
+                    "$(uci -q get netshift.VPN.community_lists | wc -w)" \
+                    "$(state_report)")"
+            else
+                reply "$LABEL: списки не применены, отказ записан в журнал"
+            fi
+            ;;
     esac
 fi
+
+[ "$TELEGRAM" -eq 1 ] || exit 0
 
 updates=$(fetch_updates) || exit 0
 now=$(date +%s)

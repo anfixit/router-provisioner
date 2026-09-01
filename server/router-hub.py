@@ -28,7 +28,17 @@ import urllib.parse
 PORT = int(os.environ.get("HUB_PORT", "9095"))
 KEY = os.environ.get("HUB_KEY", "")
 STATE_DIR = os.environ.get("HUB_STATE", "/var/lib/router-hub")
-ACTIONS = ("fix", "logs", "status", "none")
+ACTIONS = ("fix", "logs", "status", "config", "none")
+
+# Config that may be pushed is deliberately one setting: which routing lists a
+# router uses. A leaked key must not become a way to reconfigure someone else's
+# network, so nothing else is accepted and every name is checked against what
+# NetShift actually knows before it is stored.
+COMMUNITY_SERVICES = (
+    "russia_inside russia_outside ukraine_inside geoblock block porn news "
+    "anime youtube hdrezka tiktok google_ai google_play hodca discord meta "
+    "twitter cloudflare cloudfront digitalocean hetzner ovh telegram roblox"
+).split()
 LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 METRIC_MAX = 256 * 1024
 STALE_AFTER = 3600
@@ -133,6 +143,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if action:
                     write_task(label, "")
             self._send(200, (action or "none") + "\n")
+            return
+
+        # The owner pushing which routing lists a router should use.
+        if len(parts) == 2 and parts[0] == "setconfig":
+            label = parts[1]
+            if not LABEL_RE.match(label):
+                self._send(400, "bad label\n")
+                return
+            raw = query.get("lists", [""])[0]
+            names = [n.strip() for n in raw.split(",") if n.strip()]
+            unknown = [n for n in names if n not in COMMUNITY_SERVICES]
+            if not names or unknown:
+                self._send(400, "unknown lists: %s\n" % (", ".join(unknown) or "-"))
+                return
+            with _lock:
+                with open(_path("config", label), "w", encoding="utf-8") as handle:
+                    handle.write(" ".join(names))
+                write_task(label, "config")
+            self._send(200, "%s: %d lists queued\n" % (label, len(names)))
+            return
+
+        # The router collecting what it should apply.
+        if len(parts) == 2 and parts[0] == "config":
+            label = parts[1]
+            if not LABEL_RE.match(label):
+                self._send(400, "bad label\n")
+                return
+            try:
+                with open(_path("config", label), encoding="utf-8") as handle:
+                    self._send(200, handle.read().strip() + "\n")
+            except OSError:
+                self._send(200, "\n")
             return
 
         # The owner setting a task from a browser, from anywhere.

@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.13.0'
+VERSION='2.14.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -955,8 +955,24 @@ test_router_reports_its_own_health() {
     hub=$(cat "$PROJECT_DIR/server/router-hub.py")
     assert_contains "$hub" 'threading.RLock()' \
         'reading and clearing a task under one lock deadlocks on a plain Lock'
-    assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "none")' \
+    assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "config", "none")' \
         'a task is a word from a fixed list, never a command'
+
+    # Config that may be pushed is one setting - which routing lists a section
+    # uses - and every name is checked before it is stored, then checked again
+    # on the router against what that NetShift build actually knows.
+    assert_contains "$hub" 'COMMUNITY_SERVICES' \
+        'a pushed list name must be validated, not trusted'
+    assert_contains "$command" 'refusing push' \
+        'an unknown name must refuse the whole push, not half-apply it'
+    assert_contains "$command" 'constants.sh' \
+        'the router checks against its own NetShift, not a copied list'
+
+    # The two channels are independent. Requiring a bot token before the hub was
+    # consulted locked the path that survives a dead tunnel behind the one that
+    # does not, and a hub-only router did nothing at all, silently.
+    assert_contains "$command" '[ "$TELEGRAM" -eq 1 ] || [ "$HUB" -eq 1 ] || exit 0' \
+        'either channel alone must be enough to act on'
 }
 
 test_component_upgrade_is_scheduled_and_quiet() {
