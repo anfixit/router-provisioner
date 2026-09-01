@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.14.0'
+VERSION='2.15.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -998,6 +998,16 @@ test_component_upgrade_is_scheduled_and_quiet() {
     # NetShift own installer is interactive and can reset the configuration.
     assert_contains "$upgrade" 'upgrade it by hand' \
         'NetShift itself must be reported, not upgraded unattended'
+
+    # A router that updates sing-box but never itself carries every fixed bug
+    # forward, and the fix then needs someone standing on that network - the
+    # trip this whole arrangement exists to avoid.
+    assert_contains "$upgrade" 'refresh_helpers' \
+        'the router must be able to update its own helpers'
+    assert_contains "$upgrade" 'mv "$temporary" "/usr/bin/$helper"' \
+        'this helper replaces itself, so it must rename rather than truncate'
+    assert_contains "$upgrade" "head -n 1 \"\$temporary\" | grep -q '^#!'" \
+        'a truncated download must never replace a working helper'
 
     assert_contains "$lifecycle" 'router-provisioner-upgrade' \
         'the upgrade helper must be installed and scheduled'

@@ -16,6 +16,11 @@ set -u
 TAG='router-provisioner-upgrade'
 LOCK='/tmp/router-provisioner-upgrade.lock'
 PIN_HELPER='/usr/bin/router-provisioner-pin'
+VERSION_FILE='/etc/router-provisioner/version'
+RAW='https://raw.githubusercontent.com/anfixit/router-provisioner/main'
+HELPERS='router-provisioner-netshift-start router-provisioner-netshift-refresh
+router-provisioner-pin router-provisioner-upgrade router-provisioner-report
+router-provisioner-logship router-provisioner-command'
 
 log() {
     logger -t "$TAG" "$*"
@@ -109,6 +114,62 @@ restart_and_verify() {
     log 'NetShift did not come back after the upgrade; check it by hand'
     return 1
 }
+
+
+# Refresh our own helpers, not only the components they manage. A router that
+# updates sing-box but never itself carries every fixed bug forward - and the
+# fix can only be delivered by someone standing on that network, which is
+# exactly the trip this whole arrangement exists to avoid. A helper left one
+# release behind is how a one-probe failover outlived the release that fixed it.
+#
+# Each file is fetched to a temporary path, checked for a shebang and for being
+# non-empty, and only then swapped in. A truncated download must never replace
+# a working helper.
+refresh_helpers() {
+    remote=$(fetch "$RAW/VERSION") || return 1
+    remote=$(printf '%s' "$remote" | tr -d ' \r\n')
+    [ -n "$remote" ] || return 1
+
+    local_version=$(cat "$VERSION_FILE" 2>/dev/null | tr -d ' \r\n')
+    [ "$remote" = "$local_version" ] && return 1
+
+    changed=0
+    for helper in $HELPERS; do
+        temporary="/tmp/$helper.new"
+        rm -f "$temporary"
+
+        fetch "$RAW/runtime/$helper" > "$temporary" 2>/dev/null || continue
+        [ -s "$temporary" ] || { rm -f "$temporary"; continue; }
+        head -n 1 "$temporary" | grep -q '^#!' || { rm -f "$temporary"; continue; }
+
+        if ! cmp -s "$temporary" "/usr/bin/$helper"; then
+            # Rename, never write in place: this helper replaces itself here,
+            # and truncating a script the shell is still reading corrupts the
+            # rest of the run. A rename leaves the running inode untouched.
+            chmod 700 "$temporary"
+            mv "$temporary" "/usr/bin/$helper"
+            changed=$((changed + 1))
+        fi
+        rm -f "$temporary"
+    done
+
+    mkdir -p "$(dirname "$VERSION_FILE")"
+    printf '%s\n' "$remote" > "$VERSION_FILE"
+    log "helpers refreshed to $remote, $changed changed"
+    return 0
+}
+
+fetch() {
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch -q -O - "$1" 2>/dev/null
+    elif command -v curl >/dev/null 2>&1; then
+        curl -s -m 30 "$1" 2>/dev/null
+    else
+        return 127
+    fi
+}
+
+refresh_helpers || true
 
 if upgrade_sing_box; then
     restart_and_verify || true
