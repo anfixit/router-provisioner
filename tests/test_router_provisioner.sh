@@ -955,7 +955,7 @@ test_router_reports_its_own_health() {
     hub=$(cat "$PROJECT_DIR/server/router-hub.py")
     assert_contains "$hub" 'threading.RLock()' \
         'reading and clearing a task under one lock deadlocks on a plain Lock'
-    assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "config", "none")' \
+    assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "config", "update", "none")' \
         'a task is a word from a fixed list, never a command'
 
     # Config that may be pushed is one setting - which routing lists a section
