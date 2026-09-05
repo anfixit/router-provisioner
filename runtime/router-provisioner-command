@@ -236,6 +236,15 @@ if [ "$HUB" -eq 1 ]; then
             log 'status requested through the hub'
             reply "$(state_report)"
             ;;
+        update)
+            # Pull the newest helpers now instead of waiting for the nightly
+            # run. This is the only way a fix reaches a router nobody can ssh
+            # into, so it must not depend on being asked twice.
+            log 'helper update requested through the hub'
+            [ -x /usr/bin/router-provisioner-upgrade ] && \
+                /usr/bin/router-provisioner-upgrade >/dev/null 2>&1
+            reply "$(printf 'после обновления\n%s' "$(state_report)")"
+            ;;
         config)
             log 'configuration push requested through the hub'
             if apply_lists; then

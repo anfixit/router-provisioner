@@ -28,7 +28,7 @@ import urllib.parse
 PORT = int(os.environ.get("HUB_PORT", "9095"))
 KEY = os.environ.get("HUB_KEY", "")
 STATE_DIR = os.environ.get("HUB_STATE", "/var/lib/router-hub")
-ACTIONS = ("fix", "logs", "status", "config", "none")
+ACTIONS = ("fix", "logs", "status", "config", "update", "none")
 
 # Config that may be pushed is deliberately one setting: which routing lists a
 # router uses. A leaked key must not become a way to reconfigure someone else's
@@ -41,6 +41,7 @@ COMMUNITY_SERVICES = (
 ).split()
 LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 METRIC_MAX = 256 * 1024
+ARCHIVE_MAX = 8 * 1024 * 1024
 STALE_AFTER = 3600
 
 os.makedirs(STATE_DIR, exist_ok=True)
@@ -145,6 +146,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, (action or "none") + "\n")
             return
 
+        # Handing back the archive a router uploaded. Telegram needs a bot
+        # token and a working tunnel; this path needs neither, so a router with
+        # only the hub configured can still be asked what happened to it.
+        if len(parts) == 2 and parts[0] == "logs":
+            label = parts[1]
+            if not LABEL_RE.match(label):
+                self._send(400, "bad label\n")
+                return
+            try:
+                with open(_path("archive", label), "rb") as handle:
+                    body = handle.read()
+            except OSError:
+                self._send(404, "no archive yet\n")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition",
+                             'attachment; filename="%s.tar.gz"' % label)
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         # The owner pushing which routing lists a router should use.
         if len(parts) == 2 and parts[0] == "setconfig":
             label = parts[1]
@@ -210,6 +234,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if not self._authorised(query):
             self._send(404, "not found\n")
+            return
+
+        if len(parts) == 2 and parts[0] == "logs":
+            label = parts[1]
+            if not LABEL_RE.match(label):
+                self._send(400, "bad label\n")
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > ARCHIVE_MAX:
+                self._send(413, "too big\n")
+                return
+            with _lock:
+                with open(_path("archive", label), "wb") as handle:
+                    handle.write(self.rfile.read(length))
+            self._send(200, "ok\n")
             return
 
         if len(parts) == 2 and parts[0] == "metrics":

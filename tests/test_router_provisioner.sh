@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.15.0'
+VERSION='2.16.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -973,6 +973,15 @@ test_router_reports_its_own_health() {
     # does not, and a hub-only router did nothing at all, silently.
     assert_contains "$command" '[ "$TELEGRAM" -eq 1 ] || [ "$HUB" -eq 1 ] || exit 0' \
         'either channel alone must be enough to act on'
+
+    # A broken tunnel is what one usually wants the logs for, and Telegram needs
+    # that tunnel. The hub needs neither tunnel nor token.
+    assert_contains "$logship" 'HUB_URL/logs/$LABEL' \
+        'the archive must have a destination that survives a dead tunnel'
+    assert_contains "$logship" '[ "$TELEGRAM" -eq 1 ] || [ "$HUB" -eq 1 ]' \
+        'either destination alone must be enough to ship to'
+    assert_contains "$command" 'helper update requested' \
+        'a fix must reach a router nobody can ssh into'
 }
 
 test_component_upgrade_is_scheduled_and_quiet() {

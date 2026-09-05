@@ -12,6 +12,7 @@ set -u
 
 TAG='router-provisioner-logship'
 CONFIG='/etc/router-provisioner/telegram.conf'
+HUB_CONFIG='/etc/router-provisioner/hub.conf'
 WORK='/tmp/router-provisioner-logship'
 # The proxy inbound is not always on the same address or port - one router
 # binds 127.0.0.1:4534, another 192.168.x.1:2080 - so ask the config rather
@@ -51,14 +52,22 @@ cleanup() {
 
 trap cleanup 0 HUP INT TERM
 
+# Two destinations, either of which may be absent. Telegram needs a bot token
+# and a working tunnel; the hub needs neither, so a router with only the hub
+# configured can still be asked what happened to it - which is the case that
+# matters, because a broken tunnel is what one usually wants the logs for.
 BOT_TOKEN=''
 CHAT_ID=''
+HUB_URL=''
+HUB_KEY=''
 LABEL=''
-[ -r "$CONFIG" ] || { log "no $CONFIG, nothing to do"; exit 0; }
-. "$CONFIG"
+[ -r "$CONFIG" ] && . "$CONFIG"
+[ -r "$HUB_CONFIG" ] && . "$HUB_CONFIG"
 
-[ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] || {
-    log 'BOT_TOKEN or CHAT_ID missing, nothing to do'
+[ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] && TELEGRAM=1 || TELEGRAM=0
+[ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] && HUB=1 || HUB=0
+[ "$TELEGRAM" -eq 1 ] || [ "$HUB" -eq 1 ] || {
+    log 'neither Telegram nor hub is configured, nothing to do'
     exit 0
 }
 
@@ -137,12 +146,25 @@ send() {
         grep -q '"ok":true'
 }
 
-if SEND_TIMEOUT=8 send; then
-    log "archive sent ($(wc -c < "$archive") bytes)"
-elif PROXY=$(proxy_url) && send --proxy "$PROXY"; then
-    log "archive sent through the proxy ($(wc -c < "$archive") bytes)"
-else
-    log 'could not deliver the archive'
+size=$(wc -c < "$archive")
+
+if [ "$HUB" -eq 1 ]; then
+    if curl -s -m 60 --data-binary "@$archive" \
+        "$HUB_URL/logs/$LABEL?key=$HUB_KEY" >/dev/null 2>&1; then
+        log "archive uploaded to the hub ($size bytes)"
+    else
+        log 'hub did not take the archive'
+    fi
+fi
+
+if [ "$TELEGRAM" -eq 1 ]; then
+    if SEND_TIMEOUT=8 send; then
+        log "archive sent ($size bytes)"
+    elif PROXY=$(proxy_url) && send --proxy "$PROXY"; then
+        log "archive sent through the proxy ($size bytes)"
+    else
+        log 'could not deliver the archive to Telegram'
+    fi
 fi
 
 rm -f "$archive"
