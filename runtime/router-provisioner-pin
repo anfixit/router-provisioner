@@ -59,16 +59,45 @@ log() {
 }
 
 cleanup() {
-    rmdir "$LOCK" 2>/dev/null || true
+    rm -rf "$LOCK" 2>/dev/null || true
 }
 
 trap cleanup 0 HUP INT TERM
+
+# A lock that survives being killed. mkdir is atomic, but a helper killed
+# outright - by the out-of-memory killer, say - never runs its trap, and the
+# directory it left behind silences every later run. Both failures were seen on
+# the same router: 258 helper processes alive at once when memory ran out, and
+# afterwards a stale lock that made the helper a no-op for hours.
+#
+# So the lock carries the pid that took it, and a lock whose owner is gone is
+# taken over rather than obeyed.
+take_lock() {
+    if mkdir "$LOCK" 2>/dev/null; then
+        printf '%s\n' "$$" > "$LOCK/pid"
+        return 0
+    fi
+
+    owner=$(cat "$LOCK/pid" 2>/dev/null)
+    if [ -n "$owner" ] && [ -d "/proc/$owner" ]; then
+        return 1
+    fi
+
+    rm -rf "$LOCK"
+    if mkdir "$LOCK" 2>/dev/null; then
+        printf '%s\n' "$$" > "$LOCK/pid"
+        log 'took over a lock whose owner was gone'
+        return 0
+    fi
+
+    return 1
+}
 
 [ -s "$PINNED_FILE" ] || exit 0
 command -v curl >/dev/null 2>&1 || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-mkdir "$LOCK" 2>/dev/null || exit 0
+take_lock || exit 0
 
 # The Clash API binds to whatever external_controller says - usually the LAN
 # address, not loopback. Read it from the generated config rather than guessing:

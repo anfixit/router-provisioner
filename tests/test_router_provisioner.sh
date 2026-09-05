@@ -54,7 +54,7 @@ assert_false() {
 }
 
 PROGRAM='router-provisioner'
-VERSION='2.16.0'
+VERSION='2.17.0'
 DRY_RUN=0
 ASSUME_YES=0
 DIAGNOSE_ONLY=0
@@ -982,6 +982,20 @@ test_router_reports_its_own_health() {
         'either destination alone must be enough to ship to'
     assert_contains "$command" 'helper update requested' \
         'a fix must reach a router nobody can ssh into'
+
+    # mkdir is atomic, but a helper killed outright never runs its trap, and the
+    # directory it leaves behind silences every later run. Both failures were
+    # seen on the same 234 MB router: 258 helper processes alive at once when
+    # memory ran out, then a stale lock that made the helper a no-op for hours.
+    for helper in pin report command upgrade; do
+        body=$(cat "$PROJECT_DIR/runtime/router-provisioner-$helper")
+        assert_contains "$body" 'take_lock' \
+            "$helper must use a lock that survives being killed"
+        assert_contains "$body" '[ -d "/proc/$owner" ]' \
+            "$helper must check whether the lock owner still exists"
+        assert_not_contains "$body" 'mkdir "$LOCK" 2>/dev/null || exit 0' \
+            "$helper must not obey a lock left by a dead process"
+    done
 }
 
 test_component_upgrade_is_scheduled_and_quiet() {
