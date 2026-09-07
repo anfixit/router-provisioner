@@ -995,6 +995,15 @@ test_router_reports_its_own_health() {
             "$helper must check whether the lock owner still exists"
         assert_not_contains "$body" 'mkdir "$LOCK" 2>/dev/null || exit 0' \
             "$helper must not obey a lock left by a dead process"
+        # A live pid is not proof either. Pids are recycled, and a lock whose
+        # number has been handed to some unrelated long-lived process reads as
+        # held for ever: AKB_LAB kept pushing metrics, so it looked healthy,
+        # while its command channel had been wedged this way and nothing could
+        # be sent to it.
+        assert_contains "$body" 'lock_expired' \
+            "$helper must not obey a lock older than any run can last"
+        assert_contains "$body" 'find "$LOCK" -maxdepth 0 -mmin' \
+            "$helper must decide staleness by the age of the lock"
     done
 }
 

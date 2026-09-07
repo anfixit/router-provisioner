@@ -19,6 +19,7 @@ SING_BOX_CONFIG='/etc/sing-box/config.json'
 TEST_URL='https://www.gstatic.com/generate_204'
 TIMEOUT=5000
 LOCK='/tmp/router-provisioner-pin.lock'
+LOCK_MAX_AGE=15
 
 # Switching a selector closes every connection that was using the old node, and
 # the service on the other end sees a new exit address. That is the whole cost
@@ -64,14 +65,27 @@ cleanup() {
 
 trap cleanup 0 HUP INT TERM
 
+# A live pid is not proof the lock is real. Pids are recycled quickly on a
+# router, and once the recorded number belongs to some unrelated long-lived
+# process the lock reads as held for ever: the helper exits silently on every
+# run and the journal never says why. That is not hypothetical - a router went
+# on pushing metrics, so it looked healthy, while its command channel had been
+# wedged this way and no instruction could reach it.
+#
+# No run of this helper comes close to lasting LOCK_MAX_AGE minutes, so a lock
+# older than that is wreckage regardless of what the pid says.
+lock_expired() {
+    [ -n "$(find "$LOCK" -maxdepth 0 -mmin "+$LOCK_MAX_AGE" 2>/dev/null)" ]
+}
+
 # A lock that survives being killed. mkdir is atomic, but a helper killed
 # outright - by the out-of-memory killer, say - never runs its trap, and the
 # directory it left behind silences every later run. Both failures were seen on
 # the same router: 258 helper processes alive at once when memory ran out, and
 # afterwards a stale lock that made the helper a no-op for hours.
 #
-# So the lock carries the pid that took it, and a lock whose owner is gone is
-# taken over rather than obeyed.
+# So the lock carries the pid that took it, and a lock is taken over rather
+# than obeyed when its owner is gone or when it is too old to be real.
 take_lock() {
     if mkdir "$LOCK" 2>/dev/null; then
         printf '%s\n' "$$" > "$LOCK/pid"
@@ -80,13 +94,19 @@ take_lock() {
 
     owner=$(cat "$LOCK/pid" 2>/dev/null)
     if [ -n "$owner" ] && [ -d "/proc/$owner" ]; then
-        return 1
+        if lock_expired; then
+            reason='held far longer than any run can last'
+        else
+            return 1
+        fi
+    else
+        reason='an owner that no longer exists'
     fi
 
     rm -rf "$LOCK"
     if mkdir "$LOCK" 2>/dev/null; then
         printf '%s\n' "$$" > "$LOCK/pid"
-        log 'took over a lock whose owner was gone'
+        log "took over a lock left by $reason"
         return 0
     fi
 
