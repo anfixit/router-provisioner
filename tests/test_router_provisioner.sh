@@ -1185,6 +1185,13 @@ test_russian_services_stay_out_of_the_tunnel() {
     # out through a Dutch exit, and 87 requests failed in two and a half hours.
     assert_contains "$command" 'refusing push: russia_outside must not be proxied' \
         'russia_outside must never be accepted as a proxy list'
+
+    # A configuration push has to name every list, which means it can only be
+    # sent to a router whose list set someone still knows. The repair action
+    # names nothing, so it is the only way this correction reaches the routers
+    # that were set up before it existed.
+    assert_contains "$command" 'if ensure_direct_exclusion; then' \
+        'the repair action must apply the exclusion too'
 }
 
 test_version_comparison
