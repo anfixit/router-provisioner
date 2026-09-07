@@ -378,13 +378,23 @@ configure_direct_section() {
         drop_youtube_community_list "$existing"
         uci_add_list_once "netshift.$existing.local_domain_lists" \
             "$DIRECT_LIST"
+        uci_add_list_once "netshift.$existing.community_lists" russia_outside
         return 0
     fi
 
-    # An exclusion wins over the proxy lists, and it is needed for exactly one
-    # reason: russia_inside carries YouTube, so without this the video CDN
-    # would ride the subscription. Russian sites need no exclusion here - with
-    # the list model nothing is proxied unless a list asks for it.
+    # An exclusion wins over the proxy lists, and two things need it.
+    #
+    # russia_inside carries YouTube, so without this the video CDN would ride
+    # the subscription.
+    #
+    # And Russian sites do need an exclusion after all, contrary to what stood
+    # here: the hosting-provider lists - hetzner, ovh, digitalocean, cloudflare
+    # - match by address, not by name, so a Russian service hosted in Europe is
+    # pulled into the tunnel by its address alone and then answers from the
+    # wrong country. Measured on one router in a day: 102 failures to
+    # push.yandex.ru, plus sdk.mail.ru, api.browser.yandex.net, vk.com and a
+    # Russian radio stream. russia_outside is exactly the list of services that
+    # must not be proxied, so it belongs here rather than in the VPN section.
     uci_ensure_section netshift.YT_DIRECT section
     uci_set_required netshift.YT_DIRECT.connection_type exclusion
     uci_set_default netshift.YT_DIRECT.global_proxy 0
@@ -392,6 +402,7 @@ configure_direct_section() {
     uci_set_default netshift.YT_DIRECT.user_subnet_list_type disabled
     migrate_direct_list
     uci_add_list_once netshift.YT_DIRECT.local_domain_lists "$DIRECT_LIST"
+    uci_add_list_once netshift.YT_DIRECT.community_lists russia_outside
 }
 
 # local_domain_lists is a uci list, so pointing at the new name without removing

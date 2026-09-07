@@ -210,6 +210,22 @@ if ! wait_for_uplink; then
     exit 1
 fi
 
+# A restart is the answer at boot, where NetShift may not have started at all.
+# It is the wrong answer for a service that is already up: this helper is also
+# called by the subscription refresh, which runs immediately after NetShift has
+# restarted itself with the new configuration, and by hotplug when the network
+# comes back. Restarting there costs a second outage for nothing - measured as
+# two restarts twenty seconds apart, every night at three.
+#
+# The rollback path in the refresh helper is the exception: it puts an older
+# config.json on disk, which only a restart loads, so it asks explicitly.
+if [ "${FORCE_RESTART:-0}" -ne 1 ] && service_ready; then
+    log 'NetShift is already healthy; not restarting it'
+    retime_netshift_cron
+    restore_pinned_nodes
+    exit 0
+fi
+
 if attempt_start; then
     log 'NetShift is ready'
     retime_netshift_cron

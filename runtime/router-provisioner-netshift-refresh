@@ -45,7 +45,7 @@ rm -rf /etc/netshift/subscriptions
 [ -f "$BACKUP/config.json" ] && \
     cp -p "$BACKUP/config.json" /etc/sing-box/config.json
 
-if "$START_HELPER"; then
+if FORCE_RESTART=1 "$START_HELPER"; then
     log 'previous subscription cache restored successfully'
 else
     log 'rollback did not restore NetShift; service remains stopped'

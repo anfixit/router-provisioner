@@ -263,6 +263,46 @@ emit '# TYPE router_mem_available_bytes gauge'
 mem=$(awk '/^MemAvailable:/ {print $2 * 1024; exit}' /proc/meminfo 2>/dev/null)
 [ -n "$mem" ] && metric router_mem_available_bytes "$mem"
 
+# --- schedule -------------------------------------------------------------
+# NetShift recreates its own cron jobs every time it restarts, and it restarts
+# far more often than it boots: a list push, a change in LuCI, its own nightly
+# subscription job. The boot helper corrects the schedule once and never sees
+# any of that, so the correction survived exactly until the first restart.
+#
+# Measured on a router that had been up six days: eight restarts in twenty-one
+# hours, the schedule fixed once at 03:01 and polluted again seven times. What
+# it leaves behind is a second subscription updater running at 09:17 against
+# the same cache ours refreshes at 03:00 - the failure the boot helper exists
+# to prevent - and the list update back in the middle of the day.
+#
+# So re-assert it here instead, where it is seen every five minutes. Nothing is
+# written and cron is not restarted unless something actually drifted.
+schedule_polluted() {
+    [ -f /etc/crontabs/root ] || return 1
+    grep -q '/usr/bin/netshift subscription_update' /etc/crontabs/root && return 0
+    grep -q '/usr/bin/netshift list_update' /etc/crontabs/root && \
+        ! grep -q '^30 3 \* \* \* /usr/bin/netshift list_update$' \
+            /etc/crontabs/root && return 0
+    return 1
+}
+
+if schedule_polluted; then
+    corrected="/tmp/router-provisioner-cron.$$"
+    # The sed can turn NetShift's 09:13 line into one we already have, so drop
+    # duplicates afterwards rather than accumulating a copy on every restart.
+    grep -v '/usr/bin/netshift subscription_update' /etc/crontabs/root | \
+        sed 's|^.*/usr/bin/netshift list_update *$|30 3 * * * /usr/bin/netshift list_update|' | \
+        awk '!seen[$0]++' > "$corrected" 2>/dev/null
+
+    if [ -s "$corrected" ]; then
+        cat "$corrected" > /etc/crontabs/root
+        chmod 600 /etc/crontabs/root
+        /etc/init.d/cron restart >/dev/null 2>&1
+        log 'NetShift had restored its own cron jobs; schedule corrected again'
+    fi
+    rm -f "$corrected"
+fi
+
 # --- delivery -------------------------------------------------------------
 # Try the direct path first. A report that can only leave through the proxy is
 # useless for the failure it exists to catch: a broken proxy would take the

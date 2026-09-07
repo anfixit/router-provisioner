@@ -1130,6 +1130,63 @@ test_youtubeunblock_is_wired_in() {
         'entrypoint must start youtubeUnblock'
 }
 
+test_restarts_are_not_multiplied() {
+    boot=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
+    refresh=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-refresh")
+    report=$(cat "$PROJECT_DIR/runtime/router-provisioner-report")
+
+    # Every restart takes sing-box down for up to a minute, drops the pinned
+    # node and breaks whatever was connected. One router logged eight of them
+    # in twenty-one hours, and two of those were ours answering our own work:
+    # the refresh calls this helper right after NetShift has already restarted
+    # itself, and the helper restarted it again.
+    assert_contains "$boot" 'service_ready' \
+        'the guard must be able to tell a healthy service from a stopped one'
+    assert_contains "$boot" 'NetShift is already healthy; not restarting it' \
+        'a healthy NetShift must not be restarted'
+    # The rollback puts an older config.json on disk, which only a restart
+    # loads, so that one path has to say so explicitly.
+    assert_contains "$boot" '"${FORCE_RESTART:-0}" -ne 1' \
+        'a caller must still be able to demand a restart'
+    assert_contains "$refresh" 'FORCE_RESTART=1 "$START_HELPER"' \
+        'the rollback must force the restart it depends on'
+
+    # NetShift recreates its own cron jobs on every restart, so correcting them
+    # once at boot lasts exactly until the first one. Left alone, a second
+    # subscription updater runs at 09:17 against the cache ours refreshes at
+    # 03:00, and the list update returns to the middle of the day.
+    assert_contains "$report" 'schedule_polluted' \
+        'the schedule must be re-asserted, not corrected once at boot'
+    assert_contains "$report" '/usr/bin/netshift subscription_update' \
+        "NetShift's own subscription job must be removed again"
+    assert_contains "$report" 'awk' \
+        'correcting the schedule twice must not accumulate duplicate jobs'
+}
+
+test_russian_services_stay_out_of_the_tunnel() {
+    netshift=$(cat "$PROJECT_DIR/lib/netshift.sh")
+    command=$(cat "$PROJECT_DIR/runtime/router-provisioner-command")
+
+    # The hosting-provider lists match by address, not by name, so a Russian
+    # service hosted in Europe is pulled into the tunnel however the domain
+    # lists are set and then answers from the wrong country. One router logged
+    # 102 failures to push.yandex.ru in a day, plus sdk.mail.ru, vk.com and a
+    # radio stream. The exclusion section is consulted before the proxy
+    # section, so russia_outside named there is what keeps them direct.
+    assert_contains "$netshift" 'netshift.YT_DIRECT.community_lists russia_outside' \
+        'Russian services must be excluded from the tunnel'
+    assert_contains "$command" "connection_type='exclusion'" \
+        'the exclusion section must be found rather than assumed to be named'
+    assert_contains "$command" 'community_lists=russia_outside' \
+        'a pushed configuration must set the exclusion too'
+
+    # The same list in the proxy section does the exact opposite of what it is
+    # for. It was pushed that way once: VK, mail.ru, Yandex and the radio went
+    # out through a Dutch exit, and 87 requests failed in two and a half hours.
+    assert_contains "$command" 'refusing push: russia_outside must not be proxied' \
+        'russia_outside must never be accepted as a proxy list'
+}
+
 test_version_comparison
 test_public_key_validation
 test_fetcher_selection
@@ -1165,5 +1222,7 @@ test_uplink_check_survives_fakeip
 test_readiness_checks_policy_route
 test_router_reports_its_own_health
 test_component_upgrade_is_scheduled_and_quiet
+test_restarts_are_not_multiplied
+test_russian_services_stay_out_of_the_tunnel
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

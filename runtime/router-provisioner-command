@@ -254,12 +254,41 @@ apply_lists() {
             *" $name "*) : ;;
             *) log "refusing push: $name is not a list NetShift knows"; return 1 ;;
         esac
+
+        # russia_outside is the list of Russian services that are blocked when
+        # reached from abroad. Proxying them is the exact opposite of what it
+        # is for, and it has been pushed here by mistake before: VK, mail.ru,
+        # Yandex and the radio went out through a Dutch exit and 87 requests
+        # failed in two and a half hours. It belongs in the exclusion section,
+        # which is set below.
+        if [ "$name" = 'russia_outside' ]; then
+            log 'refusing push: russia_outside must not be proxied'
+            return 1
+        fi
     done
 
     uci -q delete netshift.VPN.community_lists 2>/dev/null || true
     for name in $wanted; do
         uci add_list "netshift.VPN.community_lists=$name"
     done
+
+    # The hosting-provider lists match by address, so a Russian service hosted
+    # in Europe is pulled into the tunnel whatever the domain lists say. The
+    # exclusion section is consulted before the proxy section, so naming
+    # russia_outside there is what actually keeps those services direct.
+    direct=$(uci -q show netshift | \
+        sed -n "s/^netshift\.\([^.]*\)\.connection_type='exclusion'$/\1/p" | \
+        head -n 1)
+    if [ -n "$direct" ]; then
+        if ! uci -q get "netshift.$direct.community_lists" 2>/dev/null | \
+            grep -qw russia_outside; then
+            uci add_list "netshift.$direct.community_lists=russia_outside"
+            log "russia_outside added to the direct section $direct"
+        fi
+    else
+        log 'no exclusion section found; Russian services stay in the tunnel'
+    fi
+
     uci commit netshift
 
     /etc/init.d/netshift restart >/dev/null 2>&1
