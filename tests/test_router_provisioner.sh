@@ -958,6 +958,16 @@ test_router_reports_its_own_health() {
     assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "config", "update", "none")' \
         'a task is a word from a fixed list, never a command'
 
+    # The router refuses this too, but a refusal that only reaches the router's
+    # own journal is one nobody reads. It was pushed as a proxy list once, and
+    # VK, mail.ru, Yandex and the radio went out through a Dutch exit.
+    assert_contains "$hub" 'if "russia_outside" in names:' \
+        'the browser must be told, not just the router journal'
+    # Whether an update landed is the commonest question asked of this server,
+    # and answering it meant reading the raw metrics by hand.
+    assert_contains "$hub" 'def reported_version(label):' \
+        'the status page must say which version each router is running'
+
     # Config that may be pushed is one setting - which routing lists a section
     # uses - and every name is checked before it is stored, then checked again
     # on the router against what that NetShift build actually knows.

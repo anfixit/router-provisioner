@@ -75,6 +75,23 @@ def store_metrics(label, body):
             handle.write(body)
 
 
+def reported_version(label):
+    """The provisioner version a router last reported, or "?" if it has not.
+
+    Checking that an update actually landed is the commonest question asked of
+    this server, and answering it meant reading the raw metrics by hand.
+    """
+    try:
+        with open(_path("metrics", label), encoding="utf-8") as handle:
+            for line in handle:
+                if 'name="router-provisioner"' in line:
+                    start = line.index('version="') + len('version="')
+                    return line[start:line.index('"', start)]
+    except (OSError, ValueError):
+        pass
+    return "?"
+
+
 def all_metrics():
     """Everything the routers last said, plus how long ago they said it.
 
@@ -181,6 +198,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not names or unknown:
                 self._send(400, "unknown lists: %s\n" % (", ".join(unknown) or "-"))
                 return
+            # russia_outside is the list of Russian services that are blocked
+            # when reached from abroad, so proxying them is the exact opposite
+            # of what it is for. It was pushed that way once and VK, mail.ru,
+            # Yandex and the radio went out through a Dutch exit. The router
+            # refuses it too, but a refusal that only reaches the router's own
+            # journal is one nobody reads; say so here, where it is asked.
+            if "russia_outside" in names:
+                self._send(400, "russia_outside must not be proxied; it "
+                                "belongs in the direct section, which the "
+                                "routers now set themselves\n")
+                return
             with _lock:
                 with open(_path("config", label), "w", encoding="utf-8") as handle:
                     handle.write(" ".join(names))
@@ -221,7 +249,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 label = name[len("metrics-"):]
                 age = now - os.path.getmtime(os.path.join(STATE_DIR, name))
                 pending = read_task(label) or "-"
-                rows.append(f"{label}: {age:.0f}s назад, задание: {pending}")
+                rows.append(
+                    f"{label}: {age:.0f}s назад, задание: {pending}, "
+                    f"версия: {reported_version(label)}"
+                )
             self._send(200, "\n".join(rows) + "\n" if rows else "пусто\n")
             return
 
