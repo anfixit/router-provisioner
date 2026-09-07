@@ -952,6 +952,12 @@ test_router_reports_its_own_health() {
     assert_contains "$report" '[ -n "$LABEL" ] && ROUTER_NAME=$LABEL' \
         'reports signed with an unrenamed hostname are indistinguishable'
 
+    # Three of 288 pushes never reached the server in a day - absent from its
+    # access log, with the server idle - so the loss was in the router's uplink.
+    # A report nobody receives is the same as no report.
+    assert_contains "$report" 'hub did not take the report, twice' \
+        'a report must be retried before it is given up on'
+
     hub=$(cat "$PROJECT_DIR/server/router-hub.py")
     assert_contains "$hub" 'threading.RLock()' \
         'reading and clearing a task under one lock deadlocks on a plain Lock'
@@ -1183,12 +1189,15 @@ test_russian_services_stay_out_of_the_tunnel() {
     # 102 failures to push.yandex.ru in a day, plus sdk.mail.ru, vk.com and a
     # radio stream. The exclusion section is consulted before the proxy
     # section, so russia_outside named there is what keeps them direct.
-    assert_contains "$netshift" 'netshift.YT_DIRECT.community_lists russia_outside' \
-        'Russian services must be excluded from the tunnel'
+    assert_not_contains "$netshift" 'community_lists russia_outside' \
+        'the whole community list is not what the owner wants routed direct'
     assert_contains "$command" "connection_type='exclusion'" \
         'the exclusion section must be found rather than assumed to be named'
-    assert_contains "$command" 'community_lists=russia_outside' \
-        'a pushed configuration must set the exclusion too'
+    # A router that took the earlier push has the list in its configuration
+    # already, and this channel is the only thing that reaches one nobody can
+    # ssh into - so it has to be removed, not merely no longer added.
+    assert_contains "$command" 'del_list "netshift.$direct.community_lists=russia_outside"' \
+        'a list this helper added must be removable through the same channel'
 
     # The same list in the proxy section does the exact opposite of what it is
     # for. It was pushed that way once: VK, mail.ru, Yandex and the radio went
@@ -1200,8 +1209,8 @@ test_russian_services_stay_out_of_the_tunnel() {
     # sent to a router whose list set someone still knows. The repair action
     # names nothing, so it is the only way this correction reaches the routers
     # that were set up before it existed.
-    assert_contains "$command" 'if ensure_direct_exclusion; then' \
-        'the repair action must apply the exclusion too'
+    assert_contains "$command" 'if drop_direct_russia_outside; then' \
+        'the repair action must reach routers whose list set nobody knows'
 }
 
 test_version_comparison

@@ -332,10 +332,24 @@ push_report() {
 
 push_report
 
+# One retry, because a report is only useful if it arrives. Measured over a
+# day: three of 288 pushes never reached the server at all - they are absent
+# from its access log, and the server was idle at the time - so the loss was in
+# the router's own uplink and a second attempt a few seconds later costs
+# nothing. Two attempts, not more: this runs every five minutes anyway, and a
+# helper that keeps retrying is how a slow network turns into a pile of
+# processes.
 if [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ]; then
-    curl -s -m 20 --data-binary "@$OUTPUT" \
-        "$HUB_URL/metrics/$ROUTER_NAME?key=$HUB_KEY" >/dev/null 2>&1 || \
-        log 'hub did not take the report'
+    hub_took_it=0
+    for attempt in 1 2; do
+        if curl -s -m 20 --data-binary "@$OUTPUT" \
+            "$HUB_URL/metrics/$ROUTER_NAME?key=$HUB_KEY" >/dev/null 2>&1; then
+            hub_took_it=1
+            break
+        fi
+        [ "$attempt" -eq 1 ] && sleep 5
+    done
+    [ "$hub_took_it" -eq 1 ] || log 'hub did not take the report, twice'
 fi
 
 # Self-repair, because the command channel cannot help here. Telegram is blocked

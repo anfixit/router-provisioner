@@ -216,7 +216,7 @@ state_report() {
 # Everything a repair needs, in the order a repair needs it. Nothing here takes
 # an argument from the message.
 run_fix() {
-    if ensure_direct_exclusion; then
+    if drop_direct_russia_outside; then
         uci commit netshift
     fi
 
@@ -242,33 +242,31 @@ run_fix() {
 # reconfigure someone else's network. Every name is checked against what this
 # NetShift build actually knows before anything is written; an unknown name
 # means the whole push is refused rather than half-applied.
-# The hosting-provider lists match by address, so a Russian service hosted in
-# Europe is pulled into the tunnel whatever the domain lists say. The exclusion
-# section is consulted before the proxy section, so naming russia_outside there
-# is what actually keeps those services direct.
+# Undo a list this helper put there itself. The hosting-provider lists pull
+# Russian services into the tunnel by address - 156 failures in a day on one
+# router - and russia_outside in the exclusion section did stop that, but the
+# whole community list is not what the owner wants routed around the tunnel.
+#
+# It has to be removed from here rather than simply not added: a router that
+# already took the earlier push has it in its configuration, and this is the
+# only channel that reaches one nobody can ssh into.
 #
 # The section is looked up rather than assumed: it is called YT_DIRECT on the
 # routers this was written for, but a router set up by hand may name it
-# anything, and adding the list to a section that does not exist would be a
-# silent no-op. Returns non-zero when nothing was changed, so a caller that
-# restarts only for this can decide not to.
-ensure_direct_exclusion() {
+# anything, and touching a section that does not exist would be a silent
+# no-op. Returns non-zero when nothing changed, so a caller need not commit.
+drop_direct_russia_outside() {
     direct=$(uci -q show netshift | \
         sed -n "s/^netshift\.\([^.]*\)\.connection_type='exclusion'$/\1/p" | \
         head -n 1)
 
-    if [ -z "$direct" ]; then
-        log 'no exclusion section found; Russian services stay in the tunnel'
-        return 1
-    fi
+    [ -n "$direct" ] || return 1
 
-    if uci -q get "netshift.$direct.community_lists" 2>/dev/null | \
-        grep -qw russia_outside; then
-        return 1
-    fi
+    uci -q get "netshift.$direct.community_lists" 2>/dev/null | \
+        grep -qw russia_outside || return 1
 
-    uci add_list "netshift.$direct.community_lists=russia_outside"
-    log "russia_outside added to the direct section $direct"
+    uci -q del_list "netshift.$direct.community_lists=russia_outside" || return 1
+    log "russia_outside removed from the direct section $direct"
     return 0
 }
 
@@ -306,7 +304,7 @@ apply_lists() {
         uci add_list "netshift.VPN.community_lists=$name"
     done
 
-    ensure_direct_exclusion
+    drop_direct_russia_outside
 
     uci commit netshift
 
