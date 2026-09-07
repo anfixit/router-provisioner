@@ -200,11 +200,14 @@ state_report() {
         "$(ip rule show 2>/dev/null | grep -q 'lookup netshift' && echo есть || echo НЕТ)"
     printf 'обход: %s правил\n' \
         "$(nft list ruleset 2>/dev/null | grep -c 'queue.*537')"
-    printf 'узлы: %s\n' \
-        "$(curl -s -m 8 "$(clash_api 2>/dev/null)/proxies" 2>/dev/null | \
-            jq -r '[.proxies[]? | select(.type=="VLESS")] |
-                "\([.[] | select((.history|length)>0) | select(.history[-1].delay>0)] | length)/\(length)"' \
-            2>/dev/null)"
+    # The Clash API is not listening for the first seconds after a restart, and
+    # this report is most often asked for immediately after one. An empty field
+    # reads as "no nodes at all", which is a far worse thing than "not up yet".
+    nodes=$(curl -s -m 8 "$(clash_api 2>/dev/null)/proxies" 2>/dev/null | \
+        jq -r '[.proxies[]? | select(.type=="VLESS")] |
+            "\([.[] | select((.history|length)>0) | select(.history[-1].delay>0)] | length)/\(length)"' \
+        2>/dev/null)
+    printf 'узлы: %s\n' "${nodes:-ещё не отвечают}"
     printf 'аптайм: %s\n' "$(uptime | sed 's/.*up //; s/,.*load.*//')"
     printf 'версия: %s\n' \
         "$(cat /etc/router-provisioner/version 2>/dev/null || echo неизвестна)"

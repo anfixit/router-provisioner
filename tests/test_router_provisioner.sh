@@ -982,6 +982,11 @@ test_router_reports_its_own_health() {
         'either destination alone must be enough to ship to'
     assert_contains "$command" 'helper update requested' \
         'a fix must reach a router nobody can ssh into'
+    # A status report is usually asked for right after a restart, when the
+    # Clash API has not started listening. Printing nothing there reads as
+    # "no nodes at all", which is a far worse thing than "not up yet".
+    assert_contains "$command" '${nodes:-' \
+        'an unanswered node count must say so rather than come back blank'
 
     # mkdir is atomic, but a helper killed outright never runs its trap, and the
     # directory it leaves behind silences every later run. Both failures were
