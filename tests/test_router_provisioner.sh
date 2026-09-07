@@ -1004,6 +1004,13 @@ test_router_reports_its_own_health() {
             "$helper must not obey a lock older than any run can last"
         assert_contains "$body" 'find "$LOCK" -maxdepth 0 -mmin' \
             "$helper must decide staleness by the age of the lock"
+        # The trap has to be installed before the lock is taken, or a helper
+        # killed in between leaves the directory behind. That means the run
+        # that loses the race must not delete the lock of the run that won it -
+        # otherwise nothing is excluded from anything, which is how one router
+        # ended up running 258 of these at once.
+        assert_contains "$body" '"$(cat "$LOCK/pid" 2>/dev/null)" = "$$"' \
+            "$helper must only remove a lock it owns"
     done
 }
 

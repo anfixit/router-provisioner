@@ -25,7 +25,15 @@ log() {
     logger -t "$TAG" "$*"
 }
 
+# Only ever remove our own lock. The trap is installed before the lock is
+# taken - it has to be, or a helper killed in between leaves the directory
+# behind - so a run that loses the race would otherwise delete the lock of the
+# run that won it. That is not a small leak: while one helper worked, the next
+# erased its lock, the one after took it, and nothing was mutually excluded
+# from anything. It is how a 234 MB router ended up with 258 of these alive at
+# once and sing-box killed for memory.
 cleanup() {
+    [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] || return 0
     rm -rf "$LOCK" 2>/dev/null || true
 }
 
