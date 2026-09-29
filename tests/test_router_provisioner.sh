@@ -440,6 +440,61 @@ test_subscription_is_optional() {
     rm -rf "$fixture"
 }
 
+test_repeated_paste_is_refused() {
+    fixture=$(mktemp -d)
+    TMP_DIR=$fixture
+    ASSUME_YES=0
+
+    assert_true 'a URL pasted twice must be caught' \
+        repeated_paste 'https://example.test/ahttps://example.test/a'
+    assert_true 'a DoH address pasted twice must be caught' \
+        repeated_paste 'd.adguard-dns.com/dns-query/idhttps://d.adguard-dns.com/dns-query/id'
+    assert_false 'a single URL must pass' \
+        repeated_paste 'https://example.test/a'
+    assert_false 'a single DoH address without a scheme must pass' \
+        repeated_paste 'd.adguard-dns.com/dns-query/id'
+
+    # The glued answer is asked again under the same number, not counted.
+    printf 'https://example.test/ahttps://example.test/a\nhttps://example.test/a\n\n' \
+        > "$fixture/glued"
+    read_subscriptions > "$fixture/out" 2>&1 < "$fixture/glued"
+    output=$(cat "$fixture/out")
+
+    assert_equal '1' "$SUBSCRIPTION_COUNT" \
+        'only the clean paste must be accepted'
+    assert_equal 'https://example.test/a' "$SUBSCRIPTIONS" \
+        'the accepted subscription must be the single copy'
+    assert_contains "$output" 'несколько раз подряд' \
+        'the user must be told the paste was repeated'
+    assert_not_contains "$output" 'example.test' \
+        'subscription URLs must never be echoed'
+
+    SUBSCRIPTION_COUNT=0
+    SUBSCRIPTIONS=''
+    TMP_DIR=''
+    rm -rf "$fixture"
+}
+
+test_ssh_key_keeps_password_login() {
+    fixture=$(mktemp -d)
+    DRY_RUN=1
+    ASSUME_YES=0
+
+    printf 'y\nssh-ed25519 AAAAC3Nza example\n22\n' > "$fixture/answers"
+    configure_ssh > "$fixture/out" 2>&1 < "$fixture/answers"
+    output=$(cat "$fixture/out")
+
+    assert_contains "$output" 'PasswordAuth=on' \
+        'adding a key must leave password login on'
+    assert_contains "$output" 'RootPasswordAuth=on' \
+        'adding a key must leave root password login on'
+    assert_not_contains "$output" 'PasswordAuth=off' \
+        'password login must never be switched off'
+
+    DRY_RUN=0
+    rm -rf "$fixture"
+}
+
 test_netshift_stays_stopped_without_subscription() {
     lifecycle=$(cat "$PROJECT_DIR/lib/netshift.sh")
     boot=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
@@ -1250,5 +1305,7 @@ test_router_reports_its_own_health
 test_component_upgrade_is_scheduled_and_quiet
 test_restarts_are_not_multiplied
 test_russian_services_stay_out_of_the_tunnel
+test_repeated_paste_is_refused
+test_ssh_key_keeps_password_login
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

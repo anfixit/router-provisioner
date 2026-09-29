@@ -162,7 +162,7 @@ configure_ssh() {
         yes || return 0
 
     public_key=$(ask_value \
-        'Вставьте публичный SSH-ключ, либо оставьте пустым' '')
+        'Вставьте публичный SSH-ключ (на компьютере: cat ~/.ssh/id_ed25519.pub), либо оставьте пустым' '')
 
     if [ -n "$public_key" ]; then
         valid_public_key "$public_key" || \
@@ -190,12 +190,12 @@ configure_ssh() {
     run uci set 'dropbear.@dropbear[0].Interface=lan'
     run uci set "dropbear.@dropbear[0].Port=$ssh_port"
 
-    if [ -n "$public_key" ]; then
-        run uci set 'dropbear.@dropbear[0].PasswordAuth=off'
-        run uci set 'dropbear.@dropbear[0].RootPasswordAuth=off'
-    else
-        warn 'Ключ не задан: парольный вход оставлен включённым.'
-    fi
+    # The key is an addition, not a replacement: whoever sets the router up is
+    # rarely the one who has the key on hand the next time it needs attention,
+    # and the password in LuCI is what they will try. Set explicitly, so a
+    # re-run also restores it on routers where earlier versions turned it off.
+    run uci set 'dropbear.@dropbear[0].PasswordAuth=on'
+    run uci set 'dropbear.@dropbear[0].RootPasswordAuth=on'
 
     run uci commit dropbear
     warn 'Dropbear не перезапускается автоматически.'
