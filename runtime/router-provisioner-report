@@ -342,7 +342,7 @@ push_report
 if [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ]; then
     hub_took_it=0
     for attempt in 1 2; do
-        if curl -s -m 20 --data-binary "@$OUTPUT" \
+        if curl -sf -m 20 --data-binary "@$OUTPUT" \
             "$HUB_URL/metrics/$ROUTER_NAME?key=$HUB_KEY" >/dev/null 2>&1; then
             hub_took_it=1
             break

@@ -273,7 +273,7 @@ drop_direct_russia_outside() {
 apply_lists() {
     [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] || return 1
 
-    wanted=$(curl -s -m 20 "$HUB_URL/config/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+    wanted=$(curl -sf -m 20 "$HUB_URL/config/$LABEL?key=$HUB_KEY" 2>/dev/null | \
         tr -d '\r' | tr '\n' ' ')
     [ -n "$wanted" ] || return 1
 
@@ -325,7 +325,7 @@ apply_lists() {
 # The hub first: it is reachable without the tunnel, so it still answers when
 # Telegram cannot. A task is one word from a fixed list, never a command.
 if [ "$HUB" -eq 1 ]; then
-    task=$(curl -s -m 20 "$HUB_URL/task/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+    task=$(curl -sf -m 20 "$HUB_URL/task/$LABEL?key=$HUB_KEY" 2>/dev/null | \
         tr -d '\r\n')
     case "$task" in
         fix)

@@ -1297,6 +1297,29 @@ test_russian_services_stay_out_of_the_tunnel() {
     assert_contains "$command" 'if drop_direct_russia_outside; then' \
         'the repair action must reach routers whose list set nobody knows'
 }
+test_hub_errors_are_not_taken_as_delivery() {
+    report=$(cat "$PROJECT_DIR/runtime/router-provisioner-report")
+    command=$(cat "$PROJECT_DIR/runtime/router-provisioner-command")
+    logship=$(cat "$PROJECT_DIR/runtime/router-provisioner-logship")
+
+    # The hub answers a wrong key or path with 404 on purpose, and plain curl
+    # exits 0 on it: a router with a mistyped HUB_KEY looked connected and
+    # logged nothing. Every hub request must fail on an HTTP error.
+    assert_contains "$report" 'curl -sf -m 20 --data-binary "@$OUTPUT"' \
+        'a rejected report must not count as delivered'
+    assert_contains "$logship" 'curl -sf -m 60 --data-binary "@$archive"' \
+        'a rejected archive must not count as uploaded'
+    # The body of a 404 is "not found"; it must not be read as a task or as
+    # the names of lists.
+    assert_contains "$command" 'curl -sf -m 20 "$HUB_URL/task/' \
+        'an error page must not be read as a task'
+    assert_contains "$command" 'curl -sf -m 20 "$HUB_URL/config/' \
+        'an error page must not be read as a list of lists'
+    for source in "$report" "$command" "$logship"; do
+        assert_not_contains "$source" 'curl -s -m 20 "$HUB_URL' \
+            'a hub request without -f slipped back in'
+    done
+}
 
 test_version_comparison
 test_public_key_validation
@@ -1337,5 +1360,6 @@ test_restarts_are_not_multiplied
 test_russian_services_stay_out_of_the_tunnel
 test_repeated_paste_is_refused
 test_ssh_key_keeps_password_login
+test_hub_errors_are_not_taken_as_delivery
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"
