@@ -149,7 +149,7 @@ send() {
 size=$(wc -c < "$archive")
 
 if [ "$HUB" -eq 1 ]; then
-    if curl -s -m 60 --data-binary "@$archive" \
+    if curl -sf -m 60 --data-binary "@$archive" \
         "$HUB_URL/logs/$LABEL?key=$HUB_KEY" >/dev/null 2>&1; then
         log "archive uploaded to the hub ($size bytes)"
     else
