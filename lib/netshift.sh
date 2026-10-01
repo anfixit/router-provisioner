@@ -142,11 +142,18 @@ read_subscriptions() {
     while [ "$subscription_number" -le "$MAX_SUBSCRIPTIONS" ]; do
         # A bare assignment would abort the run under set -e when the reader
         # hits end of input, for example on Ctrl-D.
-        subscription_url=$(ask_secret \
-            "Ссылка подписки #$subscription_number (Enter - пропустить)") || \
+        # Visible on purpose: hidden, a paste leaves no trace on screen and gets
+        # repeated. The terminal shows it while typing; nothing prints it back.
+        subscription_url=$(ask_value \
+            "Ссылка подписки #$subscription_number (Enter - пропустить)" '') || \
             subscription_url=''
 
         [ -n "$subscription_url" ] || break
+
+        if repeated_paste "$subscription_url"; then
+            warn 'Ссылка вставлена несколько раз подряд. Вставьте её один раз.'
+            continue
+        fi
 
         case "$subscription_url" in
             https://*) : ;;

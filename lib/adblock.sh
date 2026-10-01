@@ -49,10 +49,16 @@ configure_adblock() {
         while :; do
             # A bare assignment would abort the run under set -e when the
             # reader hits end of input.
-            candidate=$(ask_secret \
-                'Персональный DoH-адрес (Enter - пропустить)') || candidate=''
+            candidate=$(ask_value \
+                'Персональный DoH-адрес (Enter - пропустить)' '') || \
+                candidate=''
 
             [ -n "$candidate" ] || break
+
+            if repeated_paste "$candidate"; then
+                warn 'Адрес вставлен несколько раз подряд. Вставьте его один раз.'
+                continue
+            fi
 
             if valid_doh_url "$candidate"; then
                 resolver=$(strip_url_scheme "$candidate")

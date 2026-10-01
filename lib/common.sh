@@ -196,6 +196,22 @@ ask_value() {
     printf '%s\n' "$value"
 }
 
+# A pasted value arrives on a line that shows nothing when input is hidden, so
+# people paste again and again and the copies glue together. Seen on a real
+# router: a DoH address three times over and a subscription five times over,
+# which left DNS and then sing-box dead. A second scheme inside one answer is
+# never a real URL.
+repeated_paste() {
+    _rp_rest=$1
+    case "$_rp_rest" in
+        https://*|http://*) _rp_rest=${_rp_rest#*://} ;;
+    esac
+    case "$_rp_rest" in
+        *://*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 ask_secret() {
     prompt=$1
     value=''
