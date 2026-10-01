@@ -156,6 +156,17 @@ valid_public_key() {
     esac
 }
 
+# An empty field is no password at all; '!' and '*' are locked accounts, which
+# take no password either.
+root_has_password() {
+    _rhp_hash=$(awk -F: '$1 == "root" { print $2 }' \
+        "${SHADOW_FILE:-/etc/shadow}" 2>/dev/null)
+    case "$_rhp_hash" in
+        ''|'!'*|'*'*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 configure_ssh() {
     ask_yes_no \
         'Настроить SSH-ключ и ограничить Dropbear локальной сетью?' \
@@ -194,8 +205,23 @@ configure_ssh() {
     # rarely the one who has the key on hand the next time it needs attention,
     # and the password in LuCI is what they will try. Set explicitly, so a
     # re-run also restores it on routers where earlier versions turned it off.
-    run uci set 'dropbear.@dropbear[0].PasswordAuth=on'
-    run uci set 'dropbear.@dropbear[0].RootPasswordAuth=on'
+    #
+    # Only with a password, though. A fresh OpenWrt root has none, and Dropbear
+    # then lets anyone on the LAN in without asking; a key is the only thing
+    # that closed that door, so it must not be reopened.
+    if root_has_password; then
+        run uci set 'dropbear.@dropbear[0].PasswordAuth=on'
+        run uci set 'dropbear.@dropbear[0].RootPasswordAuth=on'
+    elif [ -n "$public_key" ]; then
+        run uci set 'dropbear.@dropbear[0].PasswordAuth=off'
+        run uci set 'dropbear.@dropbear[0].RootPasswordAuth=off'
+        warn 'У root нет пароля: вход по паролю выключен, пускает только ключ.'
+        warn 'Задайте пароль (passwd) и запустите скрипт снова, чтобы его вернуть.'
+    else
+        # Switching it off without a key would lock the owner out.
+        warn 'У root нет пароля, а ключ не задан: SSH пускает без пароля.'
+        warn 'Задайте пароль командой passwd.'
+    fi
 
     run uci commit dropbear
     warn 'Dropbear не перезапускается автоматически.'

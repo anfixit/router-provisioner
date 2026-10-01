@@ -479,6 +479,8 @@ test_ssh_key_keeps_password_login() {
     fixture=$(mktemp -d)
     DRY_RUN=1
     ASSUME_YES=0
+    SHADOW_FILE=$fixture/shadow
+    printf 'root:$1$abc$def:19000:0:99999:7:::\n' > "$SHADOW_FILE"
 
     printf 'y\nssh-ed25519 AAAAC3Nza example\n22\n' > "$fixture/answers"
     configure_ssh > "$fixture/out" 2>&1 < "$fixture/answers"
@@ -489,9 +491,37 @@ test_ssh_key_keeps_password_login() {
     assert_contains "$output" 'RootPasswordAuth=on' \
         'adding a key must leave root password login on'
     assert_not_contains "$output" 'PasswordAuth=off' \
-        'password login must never be switched off'
+        'password login must stay on while root has a password'
+
+    # A fresh OpenWrt root has no password, and Dropbear then lets anyone on
+    # the LAN in. With a key, the door must be closed, not left open.
+    printf 'root:::0:99999:7:::\n' > "$SHADOW_FILE"
+    configure_ssh > "$fixture/out" 2>&1 < "$fixture/answers"
+    output=$(cat "$fixture/out")
+
+    assert_contains "$output" 'PasswordAuth=off' \
+        'without a root password, a key must switch password login off'
+    assert_not_contains "$output" 'PasswordAuth=on' \
+        'an empty root password must never be left open to the LAN'
+    assert_contains "$output" 'У root нет пароля' \
+        'the owner must be told why password login is off'
+
+    # Without a key, switching it off would lock the owner out: warn instead.
+    printf 'y\n\n22\n' > "$fixture/answers"
+    configure_ssh > "$fixture/out" 2>&1 < "$fixture/answers"
+    output=$(cat "$fixture/out")
+
+    assert_not_contains "$output" 'PasswordAuth=off' \
+        'without a key, password login must not be switched off'
+    assert_contains "$output" 'SSH пускает без пароля' \
+        'the owner must be warned the router is open'
+
+    assert_true 'a hashed root password must count' \
+        sh -c 'printf "root:\$1\$a\$b:1::::::\n" > "$1"; SHADOW_FILE=$1; . "$2/lib/common.sh"; . "$2/lib/system.sh"; root_has_password' \
+        _ "$fixture/s2" "$PROJECT_DIR"
 
     DRY_RUN=0
+    SHADOW_FILE=''
     rm -rf "$fixture"
 }
 
