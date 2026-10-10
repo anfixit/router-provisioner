@@ -1046,7 +1046,7 @@ test_router_reports_its_own_health() {
     hub=$(cat "$PROJECT_DIR/server/router-hub.py")
     assert_contains "$hub" 'threading.RLock()' \
         'reading and clearing a task under one lock deadlocks on a plain Lock'
-    assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "config", "update", "none")' \
+    assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "config", "route", "update", "none")' \
         'a task is a word from a fixed list, never a command'
 
     # The router refuses this too, but a refusal that only reaches the router's
@@ -1297,6 +1297,25 @@ test_russian_services_stay_out_of_the_tunnel() {
     assert_contains "$command" 'if drop_direct_russia_outside; then' \
         'the repair action must reach routers whose list set nobody knows'
 }
+test_route_push_is_a_filter_not_a_command() {
+    hub=$(cat "$PROJECT_DIR/server/router-hub.py")
+    command=$(cat "$PROJECT_DIR/runtime/router-provisioner-command")
+
+    # Only a piece of a node name travels from the hub; the domains are fixed on
+    # the router, so a leaked key cannot redirect anything but which nodes carry
+    # Anthropic.
+    assert_contains "$hub" 'KEYWORD_RE' 'the keyword must be validated on the hub'
+    assert_contains "$command" "ROUTE_DOMAINS='claude.ai anthropic.com claude.com'" \
+        'the domains are fixed on the router, not sent'
+    assert_contains "$command" 'refusing route: bad keyword' \
+        'the router must check the keyword again'
+    # A restart that leaves sing-box down takes DNS with it for the whole site.
+    assert_contains "$command" 'restoring the previous config' \
+        'a failed route must be rolled back'
+    assert_contains "$command" 'uci reorder "$s=0"' \
+        'the section must precede russia_inside, which already carries claude.ai'
+}
+
 test_hub_errors_are_not_taken_as_delivery() {
     report=$(cat "$PROJECT_DIR/runtime/router-provisioner-report")
     command=$(cat "$PROJECT_DIR/runtime/router-provisioner-command")
@@ -1361,5 +1380,6 @@ test_russian_services_stay_out_of_the_tunnel
 test_repeated_paste_is_refused
 test_ssh_key_keeps_password_login
 test_hub_errors_are_not_taken_as_delivery
+test_route_push_is_a_filter_not_a_command
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

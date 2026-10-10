@@ -322,6 +322,90 @@ apply_lists() {
     return 0
 }
 
+# Send Anthropic through every node whose name contains a keyword, letting the
+# urltest group move between them. Unlike a pinned section there is no entry in
+# the pin file: pinning holds one node, and the point here is the opposite - when
+# one of three nodes dies the group walks to another by itself.
+#
+# Only the keyword comes from the hub, and it is checked before it touches
+# anything. The domains are fixed here. The last time a restart was done to a
+# router nobody could reach, sing-box did not come back and the whole network
+# lost DNS, so the previous configuration is kept and restored if it does not.
+ROUTE_SECTION='ANTHROPIC'
+ROUTE_DOMAINS='claude.ai anthropic.com claude.com'
+
+apply_route() {
+    [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] || return 1
+
+    keyword=$(curl -sf -m 20 "$HUB_URL/route/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+        tr -d '\r\n')
+    [ -n "$keyword" ] || return 1
+    # Shell metacharacters, as octal so no quoting can go wrong: " ' ` $ \ ; & | < >
+    # Letters are not whitelisted, because busybox cannot tell a Cyrillic one.
+    clean=$(printf '%s' "$keyword" | tr -d '\042\047\140\044\134\073\046\174\074\076')
+    if [ "$clean" != "$keyword" ]; then
+        log 'refusing route: bad keyword'
+        return 1
+    fi
+
+    subscription=$(uci -q get netshift.VPN.subscription_url) || return 1
+    [ -n "$subscription" ] || return 1
+
+    backup="/etc/router-provisioner/netshift.before-route"
+    mkdir -p /etc/router-provisioner
+    cp /etc/config/netshift "$backup" || return 1
+
+    s="netshift.$ROUTE_SECTION"
+    uci -q delete "$s" 2>/dev/null || true
+    uci set "$s=section"
+    uci set "$s.connection_type=proxy"
+    uci set "$s.proxy_config_type=subscription"
+    uci set "$s.subscription_format_preference=xray"
+    uci set "$s.subscription_insecure=0"
+    uci set "$s.subscription_group_mode=off"
+    uci set "$s.subscription_update_interval=6h"
+    uci set "$s.urltest_check_interval=5m"
+    uci set "$s.urltest_tolerance=50"
+    uci set "$s.urltest_testing_url=https://www.gstatic.com/generate_204"
+    uci set "$s.enable_udp_over_tcp=0"
+    uci set "$s.global_proxy=0"
+    uci set "$s.user_subnet_list_type=disabled"
+    uci set "$s.mixed_proxy_enabled=0"
+    uci set "$s.resolve_real_ip_for_routing=0"
+    uci add_list "$s.subscription_url=$subscription"
+    uci add_list "$s.subscription_filter_include_keywords=$keyword"
+
+    domains_text=''
+    for domain in $ROUTE_DOMAINS; do
+        domains_text="${domains_text:+$domains_text
+}$domain"
+    done
+    uci set "$s.user_domain_list_type=text"
+    uci set "$s.user_domains_text=$domains_text"
+
+    # First match wins, and russia_inside already carries claude.ai.
+    uci reorder "$s=0"
+    uci commit netshift
+
+    /etc/init.d/netshift restart >/dev/null 2>&1
+    attempt=0
+    while [ "$attempt" -lt 40 ]; do
+        pgrep -f '[s]ing-box run' >/dev/null 2>&1 && break
+        sleep 3
+        attempt=$((attempt + 1))
+    done
+
+    if pgrep -f '[s]ing-box run' >/dev/null 2>&1; then
+        log "route applied: $ROUTE_SECTION via nodes matching $keyword"
+        return 0
+    fi
+
+    log 'route failed, sing-box did not start; restoring the previous config'
+    cp "$backup" /etc/config/netshift
+    /etc/init.d/netshift restart >/dev/null 2>&1
+    return 1
+}
+
 # The hub first: it is reachable without the tunnel, so it still answers when
 # Telegram cannot. A task is one word from a fixed list, never a command.
 if [ "$HUB" -eq 1 ]; then
@@ -350,6 +434,14 @@ if [ "$HUB" -eq 1 ]; then
             [ -x /usr/bin/router-provisioner-upgrade ] && \
                 /usr/bin/router-provisioner-upgrade >/dev/null 2>&1
             reply "$(printf 'после обновления\n%s' "$(state_report)")"
+            ;;
+        route)
+            log 'route push requested through the hub'
+            if apply_route; then
+                reply "$(printf 'маршрут Anthropic применён\n%s' "$(state_report)")"
+            else
+                reply "$LABEL: маршрут не применён, прежняя настройка возвращена"
+            fi
             ;;
         config)
             log 'configuration push requested through the hub'

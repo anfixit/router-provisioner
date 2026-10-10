@@ -28,7 +28,7 @@ import urllib.parse
 PORT = int(os.environ.get("HUB_PORT", "9095"))
 KEY = os.environ.get("HUB_KEY", "")
 STATE_DIR = os.environ.get("HUB_STATE", "/var/lib/router-hub")
-ACTIONS = ("fix", "logs", "status", "config", "update", "none")
+ACTIONS = ("fix", "logs", "status", "config", "route", "update", "none")
 
 # Config that may be pushed is deliberately one setting: which routing lists a
 # router uses. A leaked key must not become a way to reconfigure someone else's
@@ -40,6 +40,10 @@ COMMUNITY_SERVICES = (
     "twitter cloudflare cloudfront digitalocean hetzner ovh telegram roblox"
 ).split()
 LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+# The one thing a route push carries: a piece of a node name from the
+# subscription, such as "Нидерланды". Letters, digits, space and hyphen only, so
+# it can never be anything but a filter.
+KEYWORD_RE = re.compile(r"^[\w -]{2,32}$")
 METRIC_MAX = 256 * 1024
 ARCHIVE_MAX = 8 * 1024 * 1024
 STALE_AFTER = 3600
@@ -224,6 +228,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 with open(_path("config", label), encoding="utf-8") as handle:
+                    self._send(200, handle.read().strip() + "\n")
+            except OSError:
+                self._send(200, "\n")
+            return
+
+        # The owner sending Anthropic through a group of nodes picked by name.
+        # The domains are fixed on the router; only the name filter travels.
+        if len(parts) == 2 and parts[0] == "setroute":
+            label = parts[1]
+            if not LABEL_RE.match(label):
+                self._send(400, "bad label\n")
+                return
+            keyword = query.get("keyword", [""])[0].strip()
+            if not KEYWORD_RE.match(keyword):
+                self._send(400, "bad keyword\n")
+                return
+            with _lock:
+                with open(_path("route", label), "w", encoding="utf-8") as handle:
+                    handle.write(keyword)
+                write_task(label, "route")
+            self._send(200, "%s: route queued\n" % label)
+            return
+
+        # The router collecting the name filter it should apply.
+        if len(parts) == 2 and parts[0] == "route":
+            label = parts[1]
+            if not LABEL_RE.match(label):
+                self._send(400, "bad label\n")
+                return
+            try:
+                with open(_path("route", label), encoding="utf-8") as handle:
                     self._send(200, handle.read().strip() + "\n")
             except OSError:
                 self._send(200, "\n")
