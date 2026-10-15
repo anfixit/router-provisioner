@@ -34,14 +34,16 @@ read_pinned_service() {
     PIN_RESERVE=''
     PIN_EXCLUDE=''
 
-    PIN_SECTION=$(ask_value \
-        'Имя секции латиницей, например ANTHROPIC (Enter - закончить)' '')
-    [ -n "$PIN_SECTION" ] || return 1
-
-    if ! section_name_is_valid "$PIN_SECTION"; then
-        warn 'Только латиница, цифры и подчёркивание. Сервис пропущен.'
-        return 1
-    fi
+    # A typo in the name must not end the whole step: ask again until the name
+    # is valid or the owner presses Enter.
+    while :; do
+        PIN_SECTION=$(ask_value \
+            'Имя секции латиницей, например ANTHROPIC (Enter - закончить)' '')
+        [ -n "$PIN_SECTION" ] || return 1
+        section_name_is_valid "$PIN_SECTION" && break
+        warn 'Только латиница, цифры и подчёркивание (без точек и пробелов).'
+        warn 'Попробуйте ещё раз, например MOST_Anthropic.'
+    done
 
     PIN_DOMAINS=$(ask_value \
         'Домены через пробел, например claude.ai anthropic.com' '')
