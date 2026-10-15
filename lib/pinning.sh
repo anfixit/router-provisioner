@@ -45,8 +45,16 @@ read_pinned_service() {
         warn 'Попробуйте ещё раз, например MOST_Anthropic.'
     done
 
-    PIN_DOMAINS=$(ask_value \
-        'Домены через пробел, например claude.ai anthropic.com' '')
+    log 'Какие домены направить через этот узел:'
+    log '  1) Anthropic: claude.ai anthropic.com claude.com'
+    log '  2) OpenAI: chatgpt.com openai.com'
+    log '  3) ввести свой список'
+    choice=$(ask_value 'Номер' '1')
+    case "$choice" in
+        1) PIN_DOMAINS='claude.ai anthropic.com claude.com' ;;
+        2) PIN_DOMAINS='chatgpt.com openai.com' ;;
+        *) PIN_DOMAINS=$(ask_value 'Домены через пробел' '') ;;
+    esac
     if [ -z "$PIN_DOMAINS" ]; then
         warn 'Без доменов секция бессмысленна. Сервис пропущен.'
         return 1
