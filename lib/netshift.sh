@@ -462,6 +462,7 @@ start_and_validate_netshift() {
         return 0
     fi
 
+    log 'Жду появления интернета (до 2 минут)...'
     wait_for_wan 120 || \
         fatal 'За 120 секунд не появился default-маршрут. Проверьте аплинк.'
     preflight_file="$TMP_DIR/russia_outside.srs"
@@ -469,6 +470,8 @@ start_and_validate_netshift() {
         [ -s "$preflight_file" ] || \
         fatal 'Роутер не может скачать russia_outside.srs напрямую.'
 
+    log 'Запускаю NetShift и жду готовности sing-box (до 100 секунд).'
+    log 'Не прерывайте скрипт: пока идёт запуск, вывода может не быть.'
     "$BOOT_SERVICE" restart || true
 
     count=0
