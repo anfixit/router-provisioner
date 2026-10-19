@@ -1297,6 +1297,24 @@ test_russian_services_stay_out_of_the_tunnel() {
     assert_contains "$command" 'if drop_direct_russia_outside; then' \
         'the repair action must reach routers whose list set nobody knows'
 }
+test_upgrade_moves_hourly_refresh_to_night() {
+    upgrade=$(cat "$PROJECT_DIR/runtime/router-provisioner-upgrade")
+
+    # A router set up before the nightly schedule existed refreshed hourly and
+    # only an installer re-run fixed it; the nightly helper must do it itself.
+    assert_contains "$upgrade" 'fix_refresh_schedule || true' \
+        'the upgrade helper must correct the refresh schedule'
+    assert_contains "$upgrade" "wanted='0 3 * * * /usr/bin/router-provisioner-netshift-refresh'" \
+        'the refresh belongs at 03:00'
+}
+test_enroll_link_is_single_use() {
+    hub=$(cat "$PROJECT_DIR/server/router-hub.py")
+
+    # The pasted line carries a token, never the hub key; the key lives only in
+    # the script it fetches, and a spent or expired token gets a plain 404.
+    assert_contains "$hub" 'os.remove(path)' 'an enrol token must be spent on use'
+    assert_contains "$hub" 'ENROLL_TTL' 'an enrol token must expire'
+}
 test_route_push_is_a_filter_not_a_command() {
     hub=$(cat "$PROJECT_DIR/server/router-hub.py")
     command=$(cat "$PROJECT_DIR/runtime/router-provisioner-command")
@@ -1381,5 +1399,7 @@ test_repeated_paste_is_refused
 test_ssh_key_keeps_password_login
 test_hub_errors_are_not_taken_as_delivery
 test_route_push_is_a_filter_not_a_command
+test_enroll_link_is_single_use
+test_upgrade_moves_hourly_refresh_to_night
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"
