@@ -20,6 +20,7 @@ import http.server
 import json
 import os
 import re
+import secrets
 import socketserver
 import threading
 import time
@@ -47,6 +48,9 @@ KEYWORD_RE = re.compile(r"^[\w -]{2,32}$")
 METRIC_MAX = 256 * 1024
 ARCHIVE_MAX = 8 * 1024 * 1024
 STALE_AFTER = 3600
+ENROLL_TTL = 3600
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+RAW = "https://raw.githubusercontent.com/anfixit/router-provisioner/main"
 
 os.makedirs(STATE_DIR, exist_ok=True)
 # Re-entrant on purpose: the task handler reads and clears under one lock, and
@@ -121,6 +125,71 @@ def all_metrics():
     return "\n".join(out) + "\n"
 
 
+def enroll_script(label, base):
+    """What a friend's router runs once to join the hub.
+
+    One line pasted over ssh, no file to edit. The key travels inside the
+    script, so the link that serves it is single-use and short-lived."""
+    return f"""#!/bin/ash
+set -e
+mkdir -p /etc/router-provisioner
+umask 077
+cat > /etc/router-provisioner/hub.conf <<'EOF'
+HUB_URL='{base}'
+HUB_KEY='{KEY}'
+LABEL='{label}'
+EOF
+chmod 600 /etc/router-provisioner/hub.conf
+if [ ! -x /usr/bin/router-provisioner-report ]; then
+    # The installer needs a terminal and the OpenWrt package servers, which a
+    # router already running NetShift cannot reach (their names resolve to a
+    # fake address). The helpers themselves only need GitHub.
+    for helper in report command logship upgrade; do
+        uclient-fetch -4 -q -O /tmp/rp-$helper \\
+            {RAW}/runtime/router-provisioner-$helper
+        head -n 1 /tmp/rp-$helper | grep -q '^#!'
+        cp /tmp/rp-$helper /usr/bin/router-provisioner-$helper
+        chmod 700 /usr/bin/router-provisioner-$helper
+        rm -f /tmp/rp-$helper
+    done
+    uclient-fetch -4 -q -O /etc/router-provisioner/version {RAW}/VERSION
+    touch /etc/crontabs/root
+    grep -vE 'router-provisioner-(report|command|logship|upgrade)' /etc/crontabs/root > /tmp/rp-cron || true
+    {{
+        cat /tmp/rp-cron
+        echo '*/5 * * * * /usr/bin/router-provisioner-report'
+        echo '*/2 * * * * /usr/bin/router-provisioner-command'
+        echo '0 9 */3 * * /usr/bin/router-provisioner-logship'
+        echo '45 3 * * * /usr/bin/router-provisioner-upgrade'
+    }} > /etc/crontabs/root
+    rm -f /tmp/rp-cron
+    chmod 600 /etc/crontabs/root
+    /etc/init.d/cron restart >/dev/null 2>&1 || true
+fi
+/usr/bin/router-provisioner-report >/dev/null 2>&1 || true
+echo "Готово: роутер подключён к хабу как {label}."
+"""
+
+
+def take_enroll(token):
+    """The label a token was made for, or "" - and the token is spent."""
+    path = _path("enroll", token)
+    with _lock:
+        try:
+            age = time.time() - os.path.getmtime(path)
+            with open(path, encoding="utf-8") as handle:
+                label = handle.read().strip()
+            os.remove(path)
+        except OSError:
+            return ""
+    return label if age <= ENROLL_TTL else ""
+
+
+def public_base(headers):
+    return os.environ.get("HUB_PUBLIC_URL") or "https://%s/hub" % (
+        headers.get("Host") or "localhost")
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "router-hub"
     sys_version = ""
@@ -149,8 +218,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, all_metrics())
             return
 
+        # A friend's router joining. The one-time token is the credential, so
+        # this sits before the key check; anything wrong is a plain 404.
+        if len(parts) == 2 and parts[0] == "enroll":
+            label = take_enroll(parts[1]) if TOKEN_RE.match(parts[1]) else ""
+            if not label:
+                self._send(404, "not found\n")
+                return
+            self._send(200, enroll_script(label, public_base(self.headers)))
+            return
+
         if not self._authorised(query):
             self._send(404, "not found\n")
+            return
+
+        # The owner minting the one line a friend pastes into their router.
+        if len(parts) == 2 and parts[0] == "mkenroll":
+            label = parts[1]
+            if not LABEL_RE.match(label):
+                self._send(400, "bad label\n")
+                return
+            token = secrets.token_urlsafe(16)
+            with _lock:
+                with open(_path("enroll", token), "w", encoding="utf-8") as handle:
+                    handle.write(label)
+            self._send(200, "uclient-fetch -4 -q -O- %s/enroll/%s | sh\n"
+                       % (public_base(self.headers), token))
             return
 
         # The router asking whether anything is waiting. Reading a task clears

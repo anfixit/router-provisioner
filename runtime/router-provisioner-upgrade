@@ -226,6 +226,30 @@ fetch() {
     fi
 }
 
+# Move the subscription refresh to the small hours on a router that still runs
+# it every hour. Every refresh restarts sing-box and wipes its fake-IP table,
+# so an hourly one breaks open connections once an hour - and only a re-run of
+# the installer used to fix that, which a router nobody can ssh into never gets.
+# Only the schedule is touched; the line is rewritten, never duplicated.
+fix_refresh_schedule() {
+    cron='/etc/crontabs/root'
+    wanted='0 3 * * * /usr/bin/router-provisioner-netshift-refresh'
+    [ -r "$cron" ] || return 0
+    grep -q 'router-provisioner-netshift-refresh' "$cron" || return 0
+    grep 'router-provisioner-netshift-refresh' "$cron" | \
+        grep -qvxF "$wanted" || return 0
+
+    temporary="/tmp/router-provisioner-upgrade-cron.$$"
+    grep -v 'router-provisioner-netshift-refresh' "$cron" > "$temporary" || true
+    printf '%s\n' "$wanted" >> "$temporary"
+    cat "$temporary" > "$cron" || { rm -f "$temporary"; return 1; }
+    rm -f "$temporary"
+    chmod 600 "$cron"
+    /etc/init.d/cron restart >/dev/null 2>&1 || true
+    log 'netshift refresh moved from hourly to 03:00'
+}
+
+fix_refresh_schedule || true
 refresh_helpers || true
 
 if upgrade_sing_box; then
