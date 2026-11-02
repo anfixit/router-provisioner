@@ -71,10 +71,23 @@ hub_pin() {
     [ -n "$HUB_IP" ] && [ -n "$HUB_URL" ] || return 0
     host=$(printf '%s\n' "$HUB_URL" | sed -e 's|^[a-z]*://||' -e 's|[:/].*$||')
     [ -n "$host" ] || return 0
-    nslookup "$host" >/dev/null 2>&1 && return 0
     printf -- '--resolve %s:443:%s' "$host" "$HUB_IP"
 }
 HUB_PIN=$(hub_pin)
+
+# The address first, the name second. Asking the resolver whether the name
+# works is no good here: NetShift answers from its fake-IP pool, so a dead
+# name still resolves and the request goes to an address that leads nowhere.
+# Only one of the two can be wrong at a time - the name when DNS is down, the
+# address when the hub has moved - so trying both costs one attempt and
+# removes both failures.
+hub_curl() {
+    if [ -n "$HUB_PIN" ]; then
+        # shellcheck disable=SC2086
+        curl -sf $HUB_PIN "$@" && return 0
+    fi
+    curl -sf "$@"
+}
 
 [ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] && TELEGRAM=1 || TELEGRAM=0
 [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] && HUB=1 || HUB=0
@@ -161,7 +174,7 @@ send() {
 size=$(wc -c < "$archive")
 
 if [ "$HUB" -eq 1 ]; then
-    if curl -sf $HUB_PIN -m 60 --data-binary "@$archive" \
+    if hub_curl -m 60 --data-binary "@$archive" \
         "$HUB_URL/logs/$LABEL?key=$HUB_KEY" >/dev/null 2>&1; then
         log "archive uploaded to the hub ($size bytes)"
     else

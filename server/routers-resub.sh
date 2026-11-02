@@ -63,9 +63,18 @@ HUB_HOST=$(printf '%s\n' "$HUB_URL" | sed -e 's|^[a-z]*://||' -e 's|[:/].*$||')
 PIN=''
 [ -n "$HUB_IP" ] && PIN="--resolve $HUB_HOST:443:$HUB_IP"
 
+# The address first, the name second: only one of the two can be wrong at a
+# time - the name when DNS is down, the address when the hub has moved.
+hub_curl() {
+    if [ -n "$PIN" ]; then
+        # shellcheck disable=SC2086
+        curl -sf $PIN "$@" && return 0
+    fi
+    curl -sf "$@"
+}
+
 status() {
-    # shellcheck disable=SC2086
-    curl -sf $PIN -m 20 "$HUB_URL/status?key=$HUB_KEY"
+    hub_curl -m 20 "$HUB_URL/status?key=$HUB_KEY"
 }
 
 # The status page is the hub's own list of routers, one per line, label first.
@@ -76,8 +85,7 @@ labels() {
 push() {
     action="$1"
     for label in $LABELS; do
-        # shellcheck disable=SC2086
-        if curl -sf $PIN -m 20 "$HUB_URL/set/$label/$action?key=$HUB_KEY" \
+        if hub_curl -m 20 "$HUB_URL/set/$label/$action?key=$HUB_KEY" \
             >/dev/null 2>&1
         then
             echo "  $label: задание «$action» поставлено"

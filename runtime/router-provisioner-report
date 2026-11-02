@@ -112,10 +112,23 @@ hub_pin() {
     [ -n "$HUB_IP" ] && [ -n "$HUB_URL" ] || return 0
     host=$(printf '%s\n' "$HUB_URL" | sed -e 's|^[a-z]*://||' -e 's|[:/].*$||')
     [ -n "$host" ] || return 0
-    nslookup "$host" >/dev/null 2>&1 && return 0
     printf -- '--resolve %s:443:%s' "$host" "$HUB_IP"
 }
 HUB_PIN=$(hub_pin)
+
+# The address first, the name second. Asking the resolver whether the name
+# works is no good here: NetShift answers from its fake-IP pool, so a dead
+# name still resolves and the request goes to an address that leads nowhere.
+# Only one of the two can be wrong at a time - the name when DNS is down, the
+# address when the hub has moved - so trying both costs one attempt and
+# removes both failures.
+hub_curl() {
+    if [ -n "$HUB_PIN" ]; then
+        # shellcheck disable=SC2086
+        curl -sf $HUB_PIN "$@" && return 0
+    fi
+    curl -sf "$@"
+}
 
 # A label the owner chose beats a hostname nobody renamed: reports signed
 # "OpenWrt" are indistinguishable from each other the moment there are two.
@@ -355,7 +368,7 @@ push_report
 if [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ]; then
     hub_took_it=0
     for attempt in 1 2; do
-        if curl -sf $HUB_PIN -m 20 --data-binary "@$OUTPUT" \
+        if hub_curl -m 20 --data-binary "@$OUTPUT" \
             "$HUB_URL/metrics/$ROUTER_NAME?key=$HUB_KEY" >/dev/null 2>&1; then
             hub_took_it=1
             break
