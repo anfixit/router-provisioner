@@ -435,6 +435,24 @@ if [ "$HUB" -eq 1 ]; then
                 /usr/bin/router-provisioner-upgrade >/dev/null 2>&1
             reply "$(printf 'после обновления\n%s' "$(state_report)")"
             ;;
+        resub)
+            # The node addresses live in the subscription, and a router only
+            # fetches it once a day. When they change under us - a node gets a
+            # new IP, or the DNS that held their names goes down and the panel
+            # starts handing out addresses instead - every router keeps dialing
+            # yesterday's config until that daily pull. This is the only way to
+            # ask for it sooner on a router nobody can ssh into. The helper
+            # keeps its own backup and rolls back on its own, so a subscription
+            # that fails to parse leaves the previous one running.
+            log 'subscription refresh requested through the hub'
+            if [ -x /usr/bin/router-provisioner-netshift-refresh ] && \
+                /usr/bin/router-provisioner-netshift-refresh >/dev/null 2>&1
+            then
+                reply "$(printf 'подписка обновлена\n%s' "$(state_report)")"
+            else
+                reply "$LABEL: подписка не обновилась, прежняя осталась в работе"
+            fi
+            ;;
         route)
             log 'route push requested through the hub'
             if apply_route; then

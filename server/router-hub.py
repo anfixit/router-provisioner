@@ -29,7 +29,7 @@ import urllib.parse
 PORT = int(os.environ.get("HUB_PORT", "9095"))
 KEY = os.environ.get("HUB_KEY", "")
 STATE_DIR = os.environ.get("HUB_STATE", "/var/lib/router-hub")
-ACTIONS = ("fix", "logs", "status", "config", "route", "update", "none")
+ACTIONS = ("fix", "logs", "status", "config", "route", "resub", "update", "none")
 
 # Config that may be pushed is deliberately one setting: which routing lists a
 # router uses. A leaked key must not become a way to reconfigure someone else's

@@ -1046,8 +1046,14 @@ test_router_reports_its_own_health() {
     hub=$(cat "$PROJECT_DIR/server/router-hub.py")
     assert_contains "$hub" 'threading.RLock()' \
         'reading and clearing a task under one lock deadlocks on a plain Lock'
-    assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "config", "route", "update", "none")' \
+    assert_contains "$hub" 'ACTIONS = ("fix", "logs", "status", "config", "route", "resub", "update", "none")' \
         'a task is a word from a fixed list, never a command'
+
+    # A node that changes address leaves every router dialing the old one until
+    # its daily subscription pull, and "fix" only restarts NetShift on the
+    # cached copy. The refresh helper is what re-reads the subscription.
+    assert_contains "$command" '/usr/bin/router-provisioner-netshift-refresh >/dev/null 2>&1' \
+        'the resub task must re-fetch the subscription, not restart the cache'
 
     # The router refuses this too, but a refusal that only reaches the router's
     # own journal is one nobody reads. It was pushed as a proxy list once, and
