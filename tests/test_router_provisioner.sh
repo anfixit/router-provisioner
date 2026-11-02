@@ -1055,6 +1055,17 @@ test_router_reports_its_own_health() {
     assert_contains "$command" '/usr/bin/router-provisioner-netshift-refresh >/dev/null 2>&1' \
         'the resub task must re-fetch the subscription, not restart the cache'
 
+    # The hub is reached by name, and on 2 November 2026 the provider holding
+    # that name went down with the names of every node: the channel for the day
+    # the tunnel dies was itself unreachable. Every helper that talks to the hub
+    # must fall back to its address.
+    for helper_src in "$command" "$report" "$logship"; do
+        assert_contains "$helper_src" 'HUB_PIN=$(hub_pin)' \
+            'a helper that talks to the hub must survive the hub name not resolving'
+    done
+    assert_contains "$hub" "HUB_IP='{PUBLIC_IP}'" \
+        'enrolment must hand the router the address behind the hub name'
+
     # The router refuses this too, but a refusal that only reaches the router's
     # own journal is one nobody reads. It was pushed as a proxy list once, and
     # VK, mail.ru, Yandex and the radio went out through a Dutch exit.
@@ -1348,15 +1359,15 @@ test_hub_errors_are_not_taken_as_delivery() {
     # The hub answers a wrong key or path with 404 on purpose, and plain curl
     # exits 0 on it: a router with a mistyped HUB_KEY looked connected and
     # logged nothing. Every hub request must fail on an HTTP error.
-    assert_contains "$report" 'curl -sf -m 20 --data-binary "@$OUTPUT"' \
+    assert_contains "$report" 'curl -sf $HUB_PIN -m 20 --data-binary "@$OUTPUT"' \
         'a rejected report must not count as delivered'
-    assert_contains "$logship" 'curl -sf -m 60 --data-binary "@$archive"' \
+    assert_contains "$logship" 'curl -sf $HUB_PIN -m 60 --data-binary "@$archive"' \
         'a rejected archive must not count as uploaded'
     # The body of a 404 is "not found"; it must not be read as a task or as
     # the names of lists.
-    assert_contains "$command" 'curl -sf -m 20 "$HUB_URL/task/' \
+    assert_contains "$command" 'curl -sf $HUB_PIN -m 20 "$HUB_URL/task/' \
         'an error page must not be read as a task'
-    assert_contains "$command" 'curl -sf -m 20 "$HUB_URL/config/' \
+    assert_contains "$command" 'curl -sf $HUB_PIN -m 20 "$HUB_URL/config/' \
         'an error page must not be read as a list of lists'
     for source in "$report" "$command" "$logship"; do
         assert_not_contains "$source" 'curl -s -m 20 "$HUB_URL' \

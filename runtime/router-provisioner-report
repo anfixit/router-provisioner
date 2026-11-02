@@ -101,8 +101,21 @@ PUSH_SECRET=''
 # tunnel, so it is silent in exactly the outage worth reporting.
 HUB_URL=''
 HUB_KEY=''
+HUB_IP=''
 LABEL=''
 [ -r "$HUB_CONFIG" ] && . "$HUB_CONFIG"
+
+# The outage that silences Telegram can also take the hub's own name with it,
+# and then the report goes nowhere. HUB_IP is used only when the name does not
+# resolve; the name still travels in SNI and in Host.
+hub_pin() {
+    [ -n "$HUB_IP" ] && [ -n "$HUB_URL" ] || return 0
+    host=$(printf '%s\n' "$HUB_URL" | sed -e 's|^[a-z]*://||' -e 's|[:/].*$||')
+    [ -n "$host" ] || return 0
+    nslookup "$host" >/dev/null 2>&1 && return 0
+    printf -- '--resolve %s:443:%s' "$host" "$HUB_IP"
+}
+HUB_PIN=$(hub_pin)
 
 # A label the owner chose beats a hostname nobody renamed: reports signed
 # "OpenWrt" are indistinguishable from each other the moment there are two.
@@ -342,7 +355,7 @@ push_report
 if [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ]; then
     hub_took_it=0
     for attempt in 1 2; do
-        if curl -sf -m 20 --data-binary "@$OUTPUT" \
+        if curl -sf $HUB_PIN -m 20 --data-binary "@$OUTPUT" \
             "$HUB_URL/metrics/$ROUTER_NAME?key=$HUB_KEY" >/dev/null 2>&1; then
             hub_took_it=1
             break

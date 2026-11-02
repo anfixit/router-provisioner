@@ -1,0 +1,425 @@
+#!/bin/ash
+# Take commands from Telegram.
+#
+# Routers sit behind NAT, so nothing can reach in to fix them. The owner can see
+# a problem in the shipped log archive and then has no way to act on it without
+# being on that network. This closes the loop from the inside: the router asks
+# the bot whether anything is waiting, and the connection is always outbound.
+#
+# Two rules make this safe to run unattended:
+#
+#   Only the configured chat is obeyed. A message from anyone else is ignored
+#   without a word, because answering would confirm the router exists.
+#
+#   Only the commands listed below run. Nothing here ever passes text from a
+#   message to a shell - a bot token leaks far too easily to let it mean
+#   "execute anything".
+set -u
+
+TAG='router-provisioner-command'
+CONFIG='/etc/router-provisioner/telegram.conf'
+HUB_CONFIG='/etc/router-provisioner/hub.conf'
+SEEN='/etc/router-provisioner/command-seen'
+LOCK='/tmp/router-provisioner-command.lock'
+LOCK_MAX_AGE=15
+MAX_AGE=900
+
+# The direct attempt is kept short. Where Telegram is blocked - which is every
+# Russian uplink this runs on - it never succeeds, and a generous timeout means
+# every single reply waits out the full clock before falling back. Six seconds
+# is long enough for an uplink where it does work and short enough not to be
+# felt where it does not.
+DIRECT_TIMEOUT=6
+PROXY_TIMEOUT=40
+
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+# Only ever remove our own lock. The trap is installed before the lock is
+# taken - it has to be, or a helper killed in between leaves the directory
+# behind - so a run that loses the race would otherwise delete the lock of the
+# run that won it. That is not a small leak: while one helper worked, the next
+# erased its lock, the one after took it, and nothing was mutually excluded
+# from anything. It is how a 234 MB router ended up with 258 of these alive at
+# once and sing-box killed for memory.
+cleanup() {
+    [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] || return 0
+    rm -rf "$LOCK" 2>/dev/null || true
+}
+
+trap cleanup 0 HUP INT TERM
+
+# A live pid is not proof the lock is real. Pids are recycled quickly on a
+# router, and once the recorded number belongs to some unrelated long-lived
+# process the lock reads as held for ever: the helper exits silently on every
+# run and the journal never says why. That is not hypothetical - a router went
+# on pushing metrics, so it looked healthy, while its command channel had been
+# wedged this way and no instruction could reach it.
+#
+# No run of this helper comes close to lasting LOCK_MAX_AGE minutes, so a lock
+# older than that is wreckage regardless of what the pid says.
+lock_expired() {
+    [ -n "$(find "$LOCK" -maxdepth 0 -mmin "+$LOCK_MAX_AGE" 2>/dev/null)" ]
+}
+
+# A lock that survives being killed. mkdir is atomic, but a helper killed
+# outright - by the out-of-memory killer, say - never runs its trap, and the
+# directory it left behind silences every later run. Both failures were seen on
+# the same router: 258 helper processes alive at once when memory ran out, and
+# afterwards a stale lock that made the helper a no-op for hours.
+#
+# So the lock carries the pid that took it, and a lock is taken over rather
+# than obeyed when its owner is gone or when it is too old to be real.
+take_lock() {
+    if mkdir "$LOCK" 2>/dev/null; then
+        printf '%s\n' "$$" > "$LOCK/pid"
+        return 0
+    fi
+
+    owner=$(cat "$LOCK/pid" 2>/dev/null)
+    if [ -n "$owner" ] && [ -d "/proc/$owner" ]; then
+        if lock_expired; then
+            reason='held far longer than any run can last'
+        else
+            return 1
+        fi
+    else
+        reason='an owner that no longer exists'
+    fi
+
+    rm -rf "$LOCK"
+    if mkdir "$LOCK" 2>/dev/null; then
+        printf '%s\n' "$$" > "$LOCK/pid"
+        log "took over a lock left by $reason"
+        return 0
+    fi
+
+    return 1
+}
+
+take_lock || exit 0
+
+# The two channels are independent and either may be absent. Requiring a bot
+# token before the hub is even consulted locked the one path that survives a
+# dead tunnel behind the one that does not - a router with only the hub
+# configured did nothing at all, silently, every two minutes.
+BOT_TOKEN=''
+CHAT_ID=''
+HUB_URL=''
+HUB_KEY=''
+LABEL=''
+[ -r "$CONFIG" ] && . "$CONFIG"
+[ -r "$HUB_CONFIG" ] && . "$HUB_CONFIG"
+
+[ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] && TELEGRAM=1 || TELEGRAM=0
+[ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] && HUB=1 || HUB=0
+[ "$TELEGRAM" -eq 1 ] || [ "$HUB" -eq 1 ] || exit 0
+
+[ -n "$LABEL" ] || LABEL=$(uci -q get system.@system[0].hostname 2>/dev/null || printf router)
+
+# Several routers can share one bot, so updates are never confirmed with an
+# offset: confirming would consume a command meant for a different router.
+# Instead each update id is remembered here once it has been handled.
+touch "$SEEN" 2>/dev/null
+chmod 600 "$SEEN" 2>/dev/null
+
+# The Clash API is not always on loopback either - the same assumption that
+# made the proxy look like a blocked Telegram makes the node count come back
+# empty. Ask the config.
+clash_api() {
+    controller=$(jq -r '.experimental.clash_api.external_controller // empty' \
+        /etc/sing-box/config.json 2>/dev/null)
+    for candidate in "$controller" '127.0.0.1:9090'; do
+        [ -n "$candidate" ] || continue
+        if curl -s -m 3 "http://$candidate/version" 2>/dev/null | \
+            grep -q '"version"'; then
+            printf 'http://%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+proxy_url() {
+    endpoint=$(jq -r '.inbounds[]? | select(.type=="mixed") |
+        "\(.listen):\(.listen_port)"' /etc/sing-box/config.json 2>/dev/null | \
+        head -n 1)
+    [ -n "$endpoint" ] || return 1
+    printf 'http://%s\n' "$endpoint"
+}
+
+api() {
+    method=$1
+    shift
+
+    if curl -s -m "$DIRECT_TIMEOUT" "$@" \
+        "https://api.telegram.org/bot${BOT_TOKEN}/${method}" 2>/dev/null | \
+        grep -q '"ok":true'; then
+        return 0
+    fi
+
+    PROXY=$(proxy_url) || return 1
+    curl -s -m "$PROXY_TIMEOUT" --proxy "$PROXY" "$@" \
+        "https://api.telegram.org/bot${BOT_TOKEN}/${method}" 2>/dev/null | \
+        grep -q '"ok":true'
+}
+
+fetch_updates() {
+    for attempt in direct proxy; do
+        if [ "$attempt" = 'proxy' ]; then
+            PROXY=$(proxy_url) || return 1
+            set -- --proxy "$PROXY" -m "$PROXY_TIMEOUT"
+        else
+            set -- -m "$DIRECT_TIMEOUT"
+        fi
+
+        body=$(curl -s "$@" \
+            "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?limit=20&timeout=0" \
+            2>/dev/null)
+        case "$body" in
+            *'"ok":true'*) printf '%s' "$body"; return 0 ;;
+        esac
+    done
+
+    return 1
+}
+
+reply() {
+    [ "$TELEGRAM" -eq 1 ] || return 0
+    api sendMessage --data-urlencode "chat_id=$CHAT_ID" \
+        --data-urlencode "text=$1" >/dev/null 2>&1
+}
+
+state_report() {
+    printf '%s\n' "$LABEL"
+    printf 'sing-box: %s\n' \
+        "$(pgrep -f '[s]ing-box run' >/dev/null && echo работает || echo ОСТАНОВЛЕН)"
+    printf 'маршрут: %s\n' \
+        "$(ip rule show 2>/dev/null | grep -q 'lookup netshift' && echo есть || echo НЕТ)"
+    printf 'обход: %s правил\n' \
+        "$(nft list ruleset 2>/dev/null | grep -c 'queue.*537')"
+    # The Clash API is not listening for the first seconds after a restart, and
+    # this report is most often asked for immediately after one. An empty field
+    # reads as "no nodes at all", which is a far worse thing than "not up yet".
+    nodes=$(curl -s -m 8 "$(clash_api 2>/dev/null)/proxies" 2>/dev/null | \
+        jq -r '[.proxies[]? | select(.type=="VLESS")] |
+            "\([.[] | select((.history|length)>0) | select(.history[-1].delay>0)] | length)/\(length)"' \
+        2>/dev/null)
+    printf 'узлы: %s\n' "${nodes:-ещё не отвечают}"
+    printf 'аптайм: %s\n' "$(uptime | sed 's/.*up //; s/,.*load.*//')"
+    printf 'версия: %s\n' \
+        "$(cat /etc/router-provisioner/version 2>/dev/null || echo неизвестна)"
+}
+
+# Everything a repair needs, in the order a repair needs it. Nothing here takes
+# an argument from the message.
+run_fix() {
+    if drop_direct_russia_outside; then
+        uci commit netshift
+    fi
+
+    /etc/init.d/netshift restart >/dev/null 2>&1
+
+    attempt=0
+    while [ "$attempt" -lt 30 ]; do
+        pgrep -f '[s]ing-box run' >/dev/null 2>&1 && break
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    [ -x /usr/bin/router-provisioner-netshift-start ] && \
+        /usr/bin/router-provisioner-netshift-start >/dev/null 2>&1
+    [ -x /usr/bin/router-provisioner-pin ] && \
+        /usr/bin/router-provisioner-pin >/dev/null 2>&1
+    /etc/init.d/youtubeUnblock restart >/dev/null 2>&1
+    /etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+# Applying a pushed configuration. Deliberately one setting - which routing
+# lists the proxy section uses - because a leaked key must not become a way to
+# reconfigure someone else's network. Every name is checked against what this
+# NetShift build actually knows before anything is written; an unknown name
+# means the whole push is refused rather than half-applied.
+# Undo a list this helper put there itself. The hosting-provider lists pull
+# Russian services into the tunnel by address - 156 failures in a day on one
+# router - and russia_outside in the exclusion section did stop that, but the
+# whole community list is not what the owner wants routed around the tunnel.
+#
+# It has to be removed from here rather than simply not added: a router that
+# already took the earlier push has it in its configuration, and this is the
+# only channel that reaches one nobody can ssh into.
+#
+# The section is looked up rather than assumed: it is called YT_DIRECT on the
+# routers this was written for, but a router set up by hand may name it
+# anything, and touching a section that does not exist would be a silent
+# no-op. Returns non-zero when nothing changed, so a caller need not commit.
+drop_direct_russia_outside() {
+    direct=$(uci -q show netshift | \
+        sed -n "s/^netshift\.\([^.]*\)\.connection_type='exclusion'$/\1/p" | \
+        head -n 1)
+
+    [ -n "$direct" ] || return 1
+
+    uci -q get "netshift.$direct.community_lists" 2>/dev/null | \
+        grep -qw russia_outside || return 1
+
+    uci -q del_list "netshift.$direct.community_lists=russia_outside" || return 1
+    log "russia_outside removed from the direct section $direct"
+    return 0
+}
+
+apply_lists() {
+    [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] || return 1
+
+    wanted=$(curl -s -m 20 "$HUB_URL/config/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+        tr -d '\r' | tr '\n' ' ')
+    [ -n "$wanted" ] || return 1
+
+    known=$(sed -n 's/^COMMUNITY_SERVICES="\(.*\)"/\1/p' \
+        /usr/lib/netshift/constants.sh 2>/dev/null)
+    [ -n "$known" ] || return 1
+
+    for name in $wanted; do
+        case " $known " in
+            *" $name "*) : ;;
+            *) log "refusing push: $name is not a list NetShift knows"; return 1 ;;
+        esac
+
+        # russia_outside is the list of Russian services that are blocked when
+        # reached from abroad. Proxying them is the exact opposite of what it
+        # is for, and it has been pushed here by mistake before: VK, mail.ru,
+        # Yandex and the radio went out through a Dutch exit and 87 requests
+        # failed in two and a half hours. It belongs in the exclusion section,
+        # which is set below.
+        if [ "$name" = 'russia_outside' ]; then
+            log 'refusing push: russia_outside must not be proxied'
+            return 1
+        fi
+    done
+
+    uci -q delete netshift.VPN.community_lists 2>/dev/null || true
+    for name in $wanted; do
+        uci add_list "netshift.VPN.community_lists=$name"
+    done
+
+    drop_direct_russia_outside
+
+    uci commit netshift
+
+    /etc/init.d/netshift restart >/dev/null 2>&1
+    attempt=0
+    while [ "$attempt" -lt 40 ]; do
+        pgrep -f '[s]ing-box run' >/dev/null 2>&1 && break
+        sleep 3
+        attempt=$((attempt + 1))
+    done
+
+    [ -x /usr/bin/router-provisioner-pin ] && \
+        /usr/bin/router-provisioner-pin >/dev/null 2>&1
+
+    return 0
+}
+
+# The hub first: it is reachable without the tunnel, so it still answers when
+# Telegram cannot. A task is one word from a fixed list, never a command.
+if [ "$HUB" -eq 1 ]; then
+    task=$(curl -s -m 20 "$HUB_URL/task/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+        tr -d '\r\n')
+    case "$task" in
+        fix)
+            log 'repair requested through the hub'
+            run_fix
+            reply "$(printf 'после починки (задание с сервера)\n%s' "$(state_report)")"
+            ;;
+        logs)
+            log 'archive requested through the hub'
+            [ -x /usr/bin/router-provisioner-logship ] && \
+                /usr/bin/router-provisioner-logship >/dev/null 2>&1
+            ;;
+        status)
+            log 'status requested through the hub'
+            reply "$(state_report)"
+            ;;
+        update)
+            # Pull the newest helpers now instead of waiting for the nightly
+            # run. This is the only way a fix reaches a router nobody can ssh
+            # into, so it must not depend on being asked twice.
+            log 'helper update requested through the hub'
+            [ -x /usr/bin/router-provisioner-upgrade ] && \
+                /usr/bin/router-provisioner-upgrade >/dev/null 2>&1
+            reply "$(printf 'после обновления\n%s' "$(state_report)")"
+            ;;
+        config)
+            log 'configuration push requested through the hub'
+            if apply_lists; then
+                reply "$(printf 'списки применены: %s\n%s' \
+                    "$(uci -q get netshift.VPN.community_lists | wc -w)" \
+                    "$(state_report)")"
+            else
+                reply "$LABEL: списки не применены, отказ записан в журнал"
+            fi
+            ;;
+    esac
+fi
+
+[ "$TELEGRAM" -eq 1 ] || exit 0
+
+updates=$(fetch_updates) || exit 0
+now=$(date +%s)
+
+printf '%s' "$updates" | \
+    jq -r --arg chat "$CHAT_ID" \
+        '.result[]? | select((.message.chat.id | tostring) == $chat) |
+         "\(.update_id)\t\(.message.date)\t\(.message.text // "")"' \
+    2>/dev/null | \
+    while IFS="$(printf '\t')" read -r update_id sent text; do
+        [ -n "$update_id" ] || continue
+        grep -Fxq "$update_id" "$SEEN" 2>/dev/null && continue
+
+        # Anything older than MAX_AGE is history, not an instruction: a command
+        # typed hours ago must not fire when the router comes back online.
+        [ -n "$sent" ] || continue
+        [ $((now - sent)) -lt "$MAX_AGE" ] || {
+            printf '%s\n' "$update_id" >> "$SEEN"
+            continue
+        }
+
+        # Every command carries the label, so one bot can serve several routers
+        # and each answers only for itself.
+        case "$text" in
+            *"$LABEL"*) : ;;
+            *) continue ;;
+        esac
+
+        printf '%s\n' "$update_id" >> "$SEEN"
+
+        case "$text" in
+            /status*)
+                log 'status requested'
+                reply "$(state_report)"
+                ;;
+            /logs*)
+                log 'archive requested'
+                reply "$LABEL: собираю архив"
+                [ -x /usr/bin/router-provisioner-logship ] && \
+                    /usr/bin/router-provisioner-logship >/dev/null 2>&1
+                ;;
+            /fix*)
+                log 'repair requested'
+                reply "$LABEL: чиню, это займёт около минуты"
+                run_fix
+                reply "$(printf 'после починки\n%s' "$(state_report)")"
+                ;;
+            *)
+                reply "$LABEL: знаю /status, /logs и /fix"
+                ;;
+        esac
+    done
+
+# Keep the file from growing without bound; the ids are only needed long enough
+# for Telegram to stop offering the same update.
+tail -n 200 "$SEEN" > "$SEEN.trim" 2>/dev/null && mv "$SEEN.trim" "$SEEN"
+
+exit 0

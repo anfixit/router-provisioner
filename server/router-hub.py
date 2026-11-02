@@ -29,6 +29,12 @@ import urllib.parse
 PORT = int(os.environ.get("HUB_PORT", "9095"))
 KEY = os.environ.get("HUB_KEY", "")
 STATE_DIR = os.environ.get("HUB_STATE", "/var/lib/router-hub")
+# The address behind the hub's own name. A router reaches the hub by name like
+# everything else, so the DNS outage that makes it dial the wrong nodes also
+# hides the one channel that could tell it so - that is what happened on
+# 2 November 2026. Handed to the router at enrolment, it is used only when the
+# name does not resolve, so a hub that moves is still found the ordinary way.
+PUBLIC_IP = os.environ.get("HUB_PUBLIC_IP", "")
 ACTIONS = ("fix", "logs", "status", "config", "route", "resub", "update", "none")
 
 # Config that may be pushed is deliberately one setting: which routing lists a
@@ -137,6 +143,7 @@ umask 077
 cat > /etc/router-provisioner/hub.conf <<'EOF'
 HUB_URL='{base}'
 HUB_KEY='{KEY}'
+HUB_IP='{PUBLIC_IP}'
 LABEL='{label}'
 EOF
 chmod 600 /etc/router-provisioner/hub.conf

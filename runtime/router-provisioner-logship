@@ -60,9 +60,21 @@ BOT_TOKEN=''
 CHAT_ID=''
 HUB_URL=''
 HUB_KEY=''
+HUB_IP=''
 LABEL=''
 [ -r "$CONFIG" ] && . "$CONFIG"
 [ -r "$HUB_CONFIG" ] && . "$HUB_CONFIG"
+
+# Logs are wanted precisely when things are broken, and a DNS outage can hide
+# the hub's name. HUB_IP is used only when the name does not resolve.
+hub_pin() {
+    [ -n "$HUB_IP" ] && [ -n "$HUB_URL" ] || return 0
+    host=$(printf '%s\n' "$HUB_URL" | sed -e 's|^[a-z]*://||' -e 's|[:/].*$||')
+    [ -n "$host" ] || return 0
+    nslookup "$host" >/dev/null 2>&1 && return 0
+    printf -- '--resolve %s:443:%s' "$host" "$HUB_IP"
+}
+HUB_PIN=$(hub_pin)
 
 [ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] && TELEGRAM=1 || TELEGRAM=0
 [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] && HUB=1 || HUB=0
@@ -149,7 +161,7 @@ send() {
 size=$(wc -c < "$archive")
 
 if [ "$HUB" -eq 1 ]; then
-    if curl -sf -m 60 --data-binary "@$archive" \
+    if curl -sf $HUB_PIN -m 60 --data-binary "@$archive" \
         "$HUB_URL/logs/$LABEL?key=$HUB_KEY" >/dev/null 2>&1; then
         log "archive uploaded to the hub ($size bytes)"
     else

@@ -109,9 +109,26 @@ BOT_TOKEN=''
 CHAT_ID=''
 HUB_URL=''
 HUB_KEY=''
+HUB_IP=''
 LABEL=''
 [ -r "$CONFIG" ] && . "$CONFIG"
 [ -r "$HUB_CONFIG" ] && . "$HUB_CONFIG"
+
+# The hub is reached by name like everything else, and on 2 November 2026 the
+# provider holding that name went down together with the names of every node.
+# The channel built for the day the tunnel dies was itself unreachable on the
+# day it was needed, from the routers and from the owner alike. HUB_IP is the
+# address behind the name: it is used only when the name does not resolve, so a
+# hub that moves is still found the ordinary way. curl keeps sending the name
+# in SNI and in Host, so the certificate and the server block see no change.
+hub_pin() {
+    [ -n "$HUB_IP" ] && [ -n "$HUB_URL" ] || return 0
+    host=$(printf '%s\n' "$HUB_URL" | sed -e 's|^[a-z]*://||' -e 's|[:/].*$||')
+    [ -n "$host" ] || return 0
+    nslookup "$host" >/dev/null 2>&1 && return 0
+    printf -- '--resolve %s:443:%s' "$host" "$HUB_IP"
+}
+HUB_PIN=$(hub_pin)
 
 [ -n "$BOT_TOKEN" ] && [ -n "$CHAT_ID" ] && TELEGRAM=1 || TELEGRAM=0
 [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] && HUB=1 || HUB=0
@@ -273,7 +290,7 @@ drop_direct_russia_outside() {
 apply_lists() {
     [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] || return 1
 
-    wanted=$(curl -sf -m 20 "$HUB_URL/config/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+    wanted=$(curl -sf $HUB_PIN -m 20 "$HUB_URL/config/$LABEL?key=$HUB_KEY" 2>/dev/null | \
         tr -d '\r' | tr '\n' ' ')
     [ -n "$wanted" ] || return 1
 
@@ -337,7 +354,7 @@ ROUTE_DOMAINS='claude.ai anthropic.com claude.com'
 apply_route() {
     [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] || return 1
 
-    keyword=$(curl -sf -m 20 "$HUB_URL/route/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+    keyword=$(curl -sf $HUB_PIN -m 20 "$HUB_URL/route/$LABEL?key=$HUB_KEY" 2>/dev/null | \
         tr -d '\r\n')
     [ -n "$keyword" ] || return 1
     # Shell metacharacters, as octal so no quoting can go wrong: " ' ` $ \ ; & | < >
@@ -409,7 +426,7 @@ apply_route() {
 # The hub first: it is reachable without the tunnel, so it still answers when
 # Telegram cannot. A task is one word from a fixed list, never a command.
 if [ "$HUB" -eq 1 ]; then
-    task=$(curl -sf -m 20 "$HUB_URL/task/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+    task=$(curl -sf $HUB_PIN -m 20 "$HUB_URL/task/$LABEL?key=$HUB_KEY" 2>/dev/null | \
         tr -d '\r\n')
     case "$task" in
         fix)
