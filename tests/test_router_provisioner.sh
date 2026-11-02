@@ -399,6 +399,8 @@ test_netshift_settings_match_reference() {
         'the unsupported subscription option must be gone'
     assert_not_contains "$output" 'netshift.settings.global_proxy' \
         'global_proxy is a per-section option, not a settings option'
+    assert_contains "$output" 'netshift.settings.exclude_bittorrent=1' \
+        'BitTorrent must bypass the tunnel'
 
     unset -f uci 2>/dev/null || true
     DRY_RUN=0

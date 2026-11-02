@@ -284,6 +284,9 @@ configure_netshift() {
     uci_set_default netshift.settings.dns_via_outbound 0
     uci_set_default netshift.settings.block_doh 0
     uci_set_default netshift.settings.enable_ipv6 0
+    # Torrents leave the tunnel: hosters block the exit node for BitTorrent
+    # seen on its address, and the package itself ships '0'. Not a taste.
+    uci_set_required netshift.settings.exclude_bittorrent 1
 
     # The boot guard validates exactly this file, so the path is not a taste.
     uci_set_required netshift.settings.config_path /etc/sing-box/config.json
