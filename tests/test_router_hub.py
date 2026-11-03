@@ -48,10 +48,10 @@ class HubTest(unittest.TestCase):
 
     def test_move_round_trip(self):
         code, _ = self.get("/setmove/r1", url="https://anfisson.duckdns.org/hub",
-                           ip="80.234.90.172")
+                           ip="1.2.3.4")
         self.assertEqual(code, 200)
         self.assertEqual(self.get("/move/r1"),
-                         (200, "https://anfisson.duckdns.org/hub 80.234.90.172\n"))
+                         (200, "https://anfisson.duckdns.org/hub 1.2.3.4\n"))
         self.assertEqual(self.get("/task/r1"), (200, "move\n"))
 
     def test_move_without_target_is_empty(self):
@@ -59,11 +59,11 @@ class HubTest(unittest.TestCase):
 
     def test_foreign_targets_are_refused(self):
         bad = [
-            ("https://evil.example/hub", "80.234.90.172"),
-            ("http://anfisson.duckdns.org/hub", "80.234.90.172"),
-            ("https://anfisson.duckdns.org.evil.example/hub", "80.234.90.172"),
-            ("https://anfisson.duckdns.org@evil.example/hub", "80.234.90.172"),
-            ("https://anfisson.duckdns.org/hub;rm", "80.234.90.172"),
+            ("https://evil.example/hub", "1.2.3.4"),
+            ("http://anfisson.duckdns.org/hub", "1.2.3.4"),
+            ("https://anfisson.duckdns.org.evil.example/hub", "1.2.3.4"),
+            ("https://anfisson.duckdns.org@evil.example/hub", "1.2.3.4"),
+            ("https://anfisson.duckdns.org/hub;rm", "1.2.3.4"),
             ("https://anfisson.duckdns.org/hub", "10.66.78.10"),
             ("https://anfisson.duckdns.org/hub", "not-an-ip"),
         ]

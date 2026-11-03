@@ -1322,19 +1322,19 @@ test_move_is_checked_on_the_router() {
         "$PROJECT_DIR/runtime/router-provisioner-command")"
 
     assert_true 'our hub must be accepted' \
-        move_target_ok 'https://anfisson.duckdns.org/hub' '80.234.90.172'
+        move_target_ok 'https://anfisson.duckdns.org/hub' '1.2.3.4'
     assert_true 'the old hub must be accepted' \
         move_target_ok 'https://kanbanfi.ru/hub' '1.2.3.4'
     assert_false 'a foreign host must be refused' \
-        move_target_ok 'https://evil.example/hub' '80.234.90.172'
+        move_target_ok 'https://evil.example/hub' '1.2.3.4'
     assert_false 'a look-alike host must be refused' \
-        move_target_ok 'https://anfisson.duckdns.org.evil.example/hub' '80.234.90.172'
+        move_target_ok 'https://anfisson.duckdns.org.evil.example/hub' '1.2.3.4'
     assert_false 'credentials in the url must be refused' \
-        move_target_ok 'https://anfisson.duckdns.org@evil.example/hub' '80.234.90.172'
+        move_target_ok 'https://anfisson.duckdns.org@evil.example/hub' '1.2.3.4'
     assert_false 'plain http must be refused' \
-        move_target_ok 'http://anfisson.duckdns.org/hub' '80.234.90.172'
+        move_target_ok 'http://anfisson.duckdns.org/hub' '1.2.3.4'
     assert_false 'shell characters must be refused' \
-        move_target_ok 'https://anfisson.duckdns.org/hub;reboot' '80.234.90.172'
+        move_target_ok 'https://anfisson.duckdns.org/hub;reboot' '1.2.3.4'
     assert_false 'a non-address must be refused' \
         move_target_ok 'https://anfisson.duckdns.org/hub' 'example'
 
