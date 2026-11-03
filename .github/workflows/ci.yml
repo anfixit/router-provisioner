@@ -32,6 +32,9 @@ jobs:
           dash -n router-provisioner.sh lib/*.sh runtime/*
           busybox ash -n router-provisioner.sh lib/*.sh runtime/*
 
+      - name: Hub tests
+        run: python3 -I tests/test_router_hub.py
+
       - name: Tests with dash
         id: dash_tests
         continue-on-error: true

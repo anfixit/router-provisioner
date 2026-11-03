@@ -17,6 +17,7 @@ Two rules keep it small enough to trust:
 """
 
 import http.server
+import ipaddress
 import json
 import os
 import re
@@ -35,7 +36,7 @@ STATE_DIR = os.environ.get("HUB_STATE", "/var/lib/router-hub")
 # 2 November 2026. Handed to the router at enrolment, it is used only when the
 # name does not resolve, so a hub that moves is still found the ordinary way.
 PUBLIC_IP = os.environ.get("HUB_PUBLIC_IP", "")
-ACTIONS = ("fix", "logs", "status", "config", "route", "resub", "update", "none")
+ACTIONS = ("fix", "logs", "status", "config", "route", "resub", "update", "move", "none")
 
 # Config that may be pushed is deliberately one setting: which routing lists a
 # router uses. A leaked key must not become a way to reconfigure someone else's
@@ -51,6 +52,12 @@ LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 # subscription, such as "Нидерланды". Letters, digits, space and hyphen only, so
 # it can never be anything but a filter.
 KEYWORD_RE = re.compile(r"^[\w -]{2,32}$")
+# A move hands a router a different hub. A leaked key must not become a way to
+# lead routers off to someone else's server, so the target is one of our own
+# names and a public address, and the router checks both again before it
+# touches hub.conf.
+MOVE_HOSTS = ("anfisson.duckdns.org", "kanbanfi.ru")
+MOVE_URL_RE = re.compile(r"^https://([a-z0-9.-]+)(/[A-Za-z0-9/_-]*)?$")
 METRIC_MAX = 256 * 1024
 ARCHIVE_MAX = 8 * 1024 * 1024
 STALE_AFTER = 3600
@@ -178,6 +185,19 @@ echo "Готово: роутер подключён к хабу как {label}."
 """
 
 
+def move_target(url, ip):
+    match = MOVE_URL_RE.match(url)
+    if not match or match.group(1) not in MOVE_HOSTS:
+        return None
+    try:
+        address = ipaddress.IPv4Address(ip)
+    except ValueError:
+        return None
+    if not address.is_global:
+        return None
+    return "%s %s" % (url.rstrip("/"), address)
+
+
 def take_enroll(token):
     """The label a token was made for, or "" - and the token is spent."""
     path = _path("enroll", token)
@@ -213,7 +233,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _authorised(self, query):
-        return bool(KEY) and query.get("key", [""])[0] == KEY
+        given = query.get("key", [""])[0]
+        return bool(KEY) and secrets.compare_digest(given.encode(), KEY.encode())
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -359,6 +380,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 with open(_path("route", label), encoding="utf-8") as handle:
+                    self._send(200, handle.read().strip() + "\n")
+            except OSError:
+                self._send(200, "\n")
+            return
+
+        if len(parts) == 2 and parts[0] == "setmove":
+            label = parts[1]
+            if not LABEL_RE.match(label):
+                self._send(400, "bad label\n")
+                return
+            target = move_target(query.get("url", [""])[0].strip(),
+                                 query.get("ip", [""])[0].strip())
+            if not target:
+                self._send(400, "bad target\n")
+                return
+            with _lock:
+                with open(_path("move", label), "w", encoding="utf-8") as handle:
+                    handle.write(target)
+                write_task(label, "move")
+            self._send(200, "%s: move queued\n" % label)
+            return
+
+        # The router collecting where it should go.
+        if len(parts) == 2 and parts[0] == "move":
+            label = parts[1]
+            if not LABEL_RE.match(label):
+                self._send(400, "bad label\n")
+                return
+            try:
+                with open(_path("move", label), encoding="utf-8") as handle:
                     self._send(200, handle.read().strip() + "\n")
             except OSError:
                 self._send(200, "\n")
