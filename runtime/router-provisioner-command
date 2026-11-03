@@ -436,6 +436,59 @@ apply_route() {
     return 1
 }
 
+# A move switches this router to a different hub. It is the one task that can
+# cut the router off for good: a hub.conf pointing nowhere leaves nothing that
+# could put it back. So the target must be one of our own names, the new hub
+# must answer with our key before anything is written, and the old file stays
+# beside the new one.
+MOVE_HOSTS='anfisson.duckdns.org kanbanfi.ru'
+
+move_target_ok() {
+    url=$1
+    ip=$2
+    case "$url" in https://*) ;; *) return 1 ;; esac
+    # Shell metacharacters and whitespace, as octal: " ' ` $ \ ; & | < > @ space
+    clean=$(printf '%s' "$url" | tr -d '\042\047\140\044\134\073\046\174\074\076\100\040')
+    [ "$clean" = "$url" ] || return 1
+    host=$(printf '%s\n' "$url" | sed -e 's|^https://||' -e 's|[:/].*$||')
+    case " $MOVE_HOSTS " in *" $host "*) ;; *) return 1 ;; esac
+    printf '%s\n' "$ip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+}
+
+apply_move() {
+    [ -n "$HUB_URL" ] && [ -n "$HUB_KEY" ] && [ -f "$HUB_CONFIG" ] || return 1
+
+    target=$(hub_curl -m 20 "$HUB_URL/move/$LABEL?key=$HUB_KEY" 2>/dev/null | \
+        tr -d '\r\n')
+    new_url=${target%% *}
+    new_ip=${target#* }
+    if ! move_target_ok "$new_url" "$new_ip"; then
+        log 'refusing move: target not allowed'
+        return 1
+    fi
+
+    new_host=$(printf '%s\n' "$new_url" | sed -e 's|^https://||' -e 's|[:/].*$||')
+    if ! curl -sf -m 20 --resolve "$new_host:443:$new_ip" \
+            "$new_url/route/$LABEL?key=$HUB_KEY" >/dev/null 2>&1 && \
+       ! curl -sf -m 20 "$new_url/route/$LABEL?key=$HUB_KEY" >/dev/null 2>&1; then
+        log 'refusing move: new hub did not answer'
+        return 1
+    fi
+
+    cp -p "$HUB_CONFIG" "$HUB_CONFIG.prev" || return 1
+    # The file carries the hub key: it is never readable by anyone but root,
+    # not even for the moment between writing and chmod.
+    (
+        umask 077
+        {
+            sed -e '/^HUB_URL=/d' -e '/^HUB_IP=/d' "$HUB_CONFIG"
+            printf "HUB_URL='%s'\nHUB_IP='%s'\n" "$new_url" "$new_ip"
+        } > "$HUB_CONFIG.new"
+    ) || return 1
+    mv "$HUB_CONFIG.new" "$HUB_CONFIG" || return 1
+    log "moved to $new_url"
+}
+
 # The hub first: it is reachable without the tunnel, so it still answers when
 # Telegram cannot. A task is one word from a fixed list, never a command.
 if [ "$HUB" -eq 1 ]; then
@@ -489,6 +542,14 @@ if [ "$HUB" -eq 1 ]; then
                 reply "$(printf 'маршрут Anthropic применён\n%s' "$(state_report)")"
             else
                 reply "$LABEL: маршрут не применён, прежняя настройка возвращена"
+            fi
+            ;;
+        move)
+            log 'hub move requested through the hub'
+            if apply_move; then
+                reply "$LABEL: переехал на новый хаб"
+            else
+                reply "$LABEL: переезд отменён, остался на прежнем хабе"
             fi
             ;;
         config)

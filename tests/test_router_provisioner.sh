@@ -1316,6 +1316,39 @@ test_russian_services_stay_out_of_the_tunnel() {
     assert_contains "$command" 'if drop_direct_russia_outside; then' \
         'the repair action must reach routers whose list set nobody knows'
 }
+test_move_is_checked_on_the_router() {
+    command=$(cat "$PROJECT_DIR/runtime/router-provisioner-command")
+    eval "$(sed -n '/^MOVE_HOSTS=/p; /^move_target_ok() {/,/^}/p' \
+        "$PROJECT_DIR/runtime/router-provisioner-command")"
+
+    assert_true 'our hub must be accepted' \
+        move_target_ok 'https://anfisson.duckdns.org/hub' '80.234.90.172'
+    assert_true 'the old hub must be accepted' \
+        move_target_ok 'https://kanbanfi.ru/hub' '1.2.3.4'
+    assert_false 'a foreign host must be refused' \
+        move_target_ok 'https://evil.example/hub' '80.234.90.172'
+    assert_false 'a look-alike host must be refused' \
+        move_target_ok 'https://anfisson.duckdns.org.evil.example/hub' '80.234.90.172'
+    assert_false 'credentials in the url must be refused' \
+        move_target_ok 'https://anfisson.duckdns.org@evil.example/hub' '80.234.90.172'
+    assert_false 'plain http must be refused' \
+        move_target_ok 'http://anfisson.duckdns.org/hub' '80.234.90.172'
+    assert_false 'shell characters must be refused' \
+        move_target_ok 'https://anfisson.duckdns.org/hub;reboot' '80.234.90.172'
+    assert_false 'a non-address must be refused' \
+        move_target_ok 'https://anfisson.duckdns.org/hub' 'example'
+
+    # Switching hubs on a router nobody can ssh into is one-way: if the new hub
+    # does not answer, the router is lost to both. So it asks first.
+    assert_contains "$command" 'refusing move: new hub did not answer' \
+        'the new hub must answer before hub.conf is touched'
+    assert_contains "$command" 'cp -p "$HUB_CONFIG" "$HUB_CONFIG.prev"' \
+        'the previous hub must be kept'
+    assert_contains "$command" 'umask 077' \
+        'hub.conf carries the key and must never be readable, even briefly'
+    assert_contains "$command" 'mv "$HUB_CONFIG.new" "$HUB_CONFIG"' \
+        'hub.conf must be replaced by rename, never written in place'
+}
 test_upgrade_moves_hourly_refresh_to_night() {
     upgrade=$(cat "$PROJECT_DIR/runtime/router-provisioner-upgrade")
 
@@ -1420,5 +1453,6 @@ test_hub_errors_are_not_taken_as_delivery
 test_route_push_is_a_filter_not_a_command
 test_enroll_link_is_single_use
 test_upgrade_moves_hourly_refresh_to_night
+test_move_is_checked_on_the_router
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"
