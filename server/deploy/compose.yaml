@@ -1,0 +1,70 @@
+# Router hub on a home server. Only caddy is reachable, and only from the DMZ
+# VLAN; the hub itself has no route anywhere but to caddy.
+name: router-hub
+
+services:
+  hub:
+    image: python:3.13-alpine
+    command: ["python3", "-I", "/app/router-hub.py"]
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 64
+    environment:
+      HUB_KEY: ${HUB_KEY:?}
+      HUB_STATE: /state
+      HUB_PUBLIC_URL: https://${HUB_DOMAIN:?}/hub
+      HUB_PUBLIC_IP: ${HUB_PUBLIC_IP:?}
+    volumes:
+      - ./router-hub.py:/app/router-hub.py:ro
+      - ./state:/state
+    networks: [hub]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10-alpine
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 128
+    dns: [77.88.8.8]
+    environment:
+      HUB_DOMAIN: ${HUB_DOMAIN:?}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
+      - ./caddy-config:/config
+      - ./logs:/var/log/caddy
+    networks:
+      dmz:
+        ipv4_address: 10.66.78.10
+      hub: {}
+    restart: unless-stopped
+
+  fail2ban:
+    image: crazymax/fail2ban:1.1.0
+    network_mode: service:caddy
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment:
+      F2B_DB_PURGE_AGE: 7d
+    volumes:
+      - ./fail2ban:/data
+      - ./logs:/var/log/caddy:ro
+    restart: unless-stopped
+
+networks:
+  hub:
+    internal: true
+  dmz:
+    driver: macvlan
+    driver_opts:
+      parent: eno1.78
+    ipam:
+      config:
+        - subnet: 10.66.78.0/24
+          gateway: 10.66.78.1
+          ip_range: 10.66.78.8/29

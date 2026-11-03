@@ -1,0 +1,36 @@
+{
+	auto_https disable_redirects
+}
+
+{$HUB_DOMAIN}:443 {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+
+	# The hub key travels in the query string; it must never reach the log.
+	log {
+		output file /var/log/caddy/access.log {
+			roll_keep_for 720h
+		}
+		format filter {
+			request>uri query {
+				delete key
+			}
+			request>headers delete
+		}
+	}
+
+	request_body {
+		max_size 9MB
+	}
+
+	handle_path /hub/* {
+		reverse_proxy hub:9095
+	}
+
+	handle {
+		respond 404
+	}
+}

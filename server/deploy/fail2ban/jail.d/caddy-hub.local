@@ -1,0 +1,9 @@
+[caddy-hub]
+enabled = true
+filter = caddy-hub
+logpath = /var/log/caddy/access.log
+maxretry = 20
+findtime = 10m
+bantime = 24h
+banaction = iptables-allports
+chain = INPUT
