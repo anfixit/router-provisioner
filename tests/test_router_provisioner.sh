@@ -1410,6 +1410,119 @@ test_hub_errors_are_not_taken_as_delivery() {
     done
 }
 
+test_netshift_generator_is_patched_once() {
+    helper="$PROJECT_DIR/runtime/router-provisioner-netshift-patch"
+    work=$(mktemp -d)
+    generator="$work/netshift"
+
+    # The two generator lines the corrections are anchored to, as NetShift
+    # 0.9.9 writes them.
+    cat > "$generator" <<'EOF_GENERATOR'
+#!/bin/sh
+build_route() {
+    local config
+    config=$(sing_box_cm_add_hijack_dns_route_rule "$config" "protocol" "dns")
+    foreach_active_section configure_routing_for_section_lists "section"
+}
+EOF_GENERATOR
+
+    assert_true 'the first run must patch the generator' \
+        env NETSHIFT_BIN="$generator" sh "$helper"
+    patched=$(cat "$generator")
+    assert_contains "$patched" '"$config" "inbound"' \
+        'everything that reaches dns-in must be hijacked by inbound'
+    assert_contains "$patched" '/usr/bin/router-provisioner-youtube-devices)' \
+        'the finished route must pass through the YouTube devices helper'
+    assert_true 'the patched generator must still parse' sh -n "$generator"
+    assert_false 'the generator as NetShift shipped it must be kept' \
+        grep -q 'router-provisioner:' "$generator.before-router-provisioner"
+    assert_false 'a second run must leave the generator alone' \
+        env NETSHIFT_BIN="$generator" sh "$helper"
+
+    # A router patched before the device hook existed gets only the hook.
+    sed '/youtube device hook/,/^    fi$/d' "$generator" > "$generator.old"
+    mv "$generator.old" "$generator"
+    assert_true 'a generator with only the loop guard must get the hook' \
+        env NETSHIFT_BIN="$generator" sh "$helper"
+    assert_equal 1 "$(grep -c 'dns-in loop guard' "$generator")" \
+        'the loop guard must not be added twice'
+
+    # A generator without the known lines is never guessed at.
+    printf '#!/bin/sh\necho changed upstream\n' > "$generator"
+    assert_false 'an unknown generator must not be patched' \
+        env NETSHIFT_BIN="$generator" sh "$helper"
+    assert_equal 'echo changed upstream' "$(sed -n 2p "$generator")" \
+        'an unknown generator must stay byte for byte as it was'
+    rm -rf "$work"
+
+    start=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-start")
+    refresh=$(cat "$PROJECT_DIR/runtime/router-provisioner-netshift-refresh")
+    assert_contains "$start" 'router-provisioner-netshift-patch' \
+        'a NetShift upgrade must not lose the corrections past the next start'
+    assert_contains "$refresh" 'router-provisioner-netshift-patch' \
+        'the nightly refresh must put the corrections back before regenerating'
+
+    for file in router-provisioner.sh runtime/router-provisioner-upgrade \
+        lib/lifecycle.sh; do
+        text=$(cat "$PROJECT_DIR/$file")
+        assert_contains "$text" 'router-provisioner-youtube-devices' \
+            "$file must deliver the YouTube devices helper"
+    done
+}
+
+test_youtube_of_listed_devices_goes_through_the_tunnel() {
+    helper="$PROJECT_DIR/runtime/router-provisioner-youtube-devices"
+    work=$(mktemp -d)
+    devices="$work/youtube-via-vpn"
+
+    cat > "$work/config.json" <<'EOF_CONFIG'
+{"outbounds":[{"tag":"direct-out","type":"direct"},{"tag":"VPN-out","type":"selector"}],
+ "route":{"rules":[
+  {"action":"sniff","inbound":["tproxy-in","dns-in"]},
+  {"action":"hijack-dns","protocol":"dns"},
+  {"action":"route","inbound":"tproxy-in","outbound":"direct-out","rule_set":"YT_DIRECT-local-domains-ruleset"},
+  {"action":"route","inbound":"tproxy-in","outbound":"VPN-out","rule_set":["VPN-russia_inside-community-ruleset"]}
+ ],"final":"direct-out"}}
+EOF_CONFIG
+    original=$(jq -c . "$work/config.json")
+
+    unchanged=$(DEVICES_FILE="$work/missing" sh "$helper" < "$work/config.json" | jq -c .)
+    assert_equal "$original" "$unchanged" \
+        'without a device list the config must stay as it was'
+
+    printf '# Yandex Module\nB8:87:6E:46:DE:10\n10.66.77.50  # old TV\nnot-a-device\n' \
+        > "$devices"
+    routed=$(DEVICES_FILE="$devices" sh "$helper" < "$work/config.json")
+
+    assert_equal 'b8:87:6e:46:de:10' \
+        "$(printf '%s' "$routed" | jq -r '.route.rules[] | select(.source_mac_address) | .source_mac_address[0]')" \
+        'a device listed by MAC must get its own rule, in lower case'
+    assert_equal '10.66.77.50' \
+        "$(printf '%s' "$routed" | jq -r '.route.rules[] | select(.source_ip_cidr) | .source_ip_cidr[0]')" \
+        'a device listed by address must get its own rule'
+    assert_equal 'source_ip_cidr source_mac_address YT_DIRECT-local-domains-ruleset' \
+        "$(printf '%s' "$routed" | jq -r '[.route.rules[2:5][] | if .rule_set then .rule_set else (keys[] | select(startswith("source_"))) end] | join(" ")')" \
+        'the device rules must come ahead of the direct YouTube rule'
+    assert_equal 'VPN-out' \
+        "$(printf '%s' "$routed" | jq -r '[.route.rules[] | select(.source_mac_address) | .outbound][0]')" \
+        'the devices must reach YouTube through the tunnel'
+    assert_contains "$(printf '%s' "$routed" | jq -c '.route.rules[2].domain_suffix')" \
+        '"googlevideo.com"' 'the video itself must go through the tunnel too'
+    assert_not_contains "$(printf '%s' "$routed" | jq -c '.route.rules[2].domain_suffix')" \
+        'yandex' 'nothing but YouTube may leave the Russian address'
+    assert_equal 'true' "$(printf '%s' "$routed" | jq -r '.route.find_neighbor')" \
+        'MAC matching must turn on the neighbour lookup'
+    assert_not_contains "$routed" 'not-a-device' \
+        'a malformed line must never reach sing-box'
+
+    # No tunnel outbound (no subscription yet): the direct route stays.
+    jq -c 'del(.outbounds[1])' "$work/config.json" > "$work/no-vpn.json"
+    assert_equal "$(jq -c . "$work/no-vpn.json")" \
+        "$(DEVICES_FILE="$devices" sh "$helper" < "$work/no-vpn.json" | jq -c .)" \
+        'without the tunnel outbound the config must stay as it was'
+    rm -rf "$work"
+}
+
 test_version_comparison
 test_public_key_validation
 test_fetcher_selection
@@ -1454,5 +1567,7 @@ test_route_push_is_a_filter_not_a_command
 test_enroll_link_is_single_use
 test_upgrade_moves_hourly_refresh_to_night
 test_move_is_checked_on_the_router
+test_netshift_generator_is_patched_once
+test_youtube_of_listed_devices_goes_through_the_tunnel
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

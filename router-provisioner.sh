@@ -81,7 +81,9 @@ main() {
         router-provisioner-upgrade \
         router-provisioner-report \
         router-provisioner-logship \
-        router-provisioner-command; do
+        router-provisioner-command \
+        router-provisioner-netshift-patch \
+        router-provisioner-youtube-devices; do
         destination="$RUNTIME_DIR/$helper"
         fetch_file "runtime/$helper" "$destination" || \
             fatal "Не удалось скачать runtime/$helper из ref ${REF}."
