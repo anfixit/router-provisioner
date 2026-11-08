@@ -188,7 +188,12 @@ configure_youtubeunblock() {
     uci_set_default "youtubeUnblock.$section.name" 'Default section'
     uci_set_required "youtubeUnblock.$section.enabled" 1
     uci_set_default "youtubeUnblock.$section.tls_enabled" 1
-    uci_set_default "youtubeUnblock.$section.fake_sni" 0
+    # Splitting the ClientHello is enough for TLS 1.3 only. A TLS 1.2 client -
+    # the Yandex Module TV box, older TV apps - gets no ServerHello unless a
+    # fake ClientHello goes first: measured behind flint2 on 2026-11-08, every
+    # faking strategy made TLS 1.2 to www.youtube.com and i.ytimg.com answer
+    # 200, while fake_sni=0 left both hanging. TLS 1.3 kept working either way.
+    uci_set_default "youtubeUnblock.$section.fake_sni" 1
     uci_set_default "youtubeUnblock.$section.faking_strategy" pastseq
     uci_set_default "youtubeUnblock.$section.fake_sni_seq_len" 1
     uci_set_default "youtubeUnblock.$section.fake_sni_type" default

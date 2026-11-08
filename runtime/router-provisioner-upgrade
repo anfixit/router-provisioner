@@ -21,7 +21,8 @@ VERSION_FILE='/etc/router-provisioner/version'
 RAW='https://raw.githubusercontent.com/anfixit/router-provisioner/main'
 HELPERS='router-provisioner-netshift-start router-provisioner-netshift-refresh
 router-provisioner-pin router-provisioner-upgrade router-provisioner-report
-router-provisioner-logship router-provisioner-command'
+router-provisioner-logship router-provisioner-command
+router-provisioner-netshift-patch router-provisioner-youtube-devices'
 
 log() {
     logger -t "$TAG" "$*"
@@ -182,13 +183,24 @@ restart_and_verify() {
 # Each file is fetched to a temporary path, checked for a shebang and for being
 # non-empty, and only then swapped in. A truncated download must never replace
 # a working helper.
+all_helpers_present() {
+    for helper in $HELPERS; do
+        [ -x "/usr/bin/$helper" ] || return 1
+    done
+}
+
 refresh_helpers() {
     remote=$(fetch "$RAW/VERSION") || return 1
     remote=$(printf '%s' "$remote" | tr -d ' \r\n')
     [ -n "$remote" ] || return 1
 
     local_version=$(tr -d ' \r\n' < "$VERSION_FILE" 2>/dev/null)
-    [ "$remote" = "$local_version" ] && return 1
+    # A matching version is not enough when a release adds a helper: the copy
+    # of this script that installed the release did not know the new name yet,
+    # so the version file says current while the file was never fetched.
+    if [ "$remote" = "$local_version" ] && all_helpers_present; then
+        return 1
+    fi
 
     changed=0
     for helper in $HELPERS; do
