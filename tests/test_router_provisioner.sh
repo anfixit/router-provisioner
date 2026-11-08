@@ -364,6 +364,8 @@ test_youtubeunblock_matches_reference() {
         'configuration strategy must match the reference router'
     assert_contains "$output" 'faking_strategy=pastseq' \
         'faking strategy must match the reference router'
+    assert_contains "$output" 'fake_sni=1' \
+        'a fake ClientHello must go first, or TLS 1.2 clients get no answer'
     assert_contains "$output" 'sni_domains=googlevideo.com' \
         'googlevideo.com must be handled by youtubeUnblock'
     assert_contains "$output" 'sni_domains=l.google.com' \
