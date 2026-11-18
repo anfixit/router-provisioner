@@ -4,6 +4,10 @@
 
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии следуют [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [2.30.1]
+
+- Проверка DNS ожидает запуска sing-box после асинхронного рестарта NetShift.
+
 ## [2.30.0]
 
 - Хаб принимает адресное задание `dns-google`. Роутер проверяет Google DoH,

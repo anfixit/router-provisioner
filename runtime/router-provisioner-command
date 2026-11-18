@@ -533,12 +533,14 @@ switch_google_dns() {
         mv "$DNS_PENDING.new" "$DNS_PENDING" || return 1
     if uci set 'netshift.settings.dns_server=dns.google/dns-query' &&
         uci commit netshift && /etc/init.d/netshift restart >/dev/null 2>&1; then
-        for attempt in 1 2 3; do
+        attempt=0
+        while [ "$attempt" -lt 40 ]; do
             if local_dns_ready; then
                 rm -f "$DNS_PENDING"
                 return $?
             fi
-            sleep 2
+            sleep 3
+            attempt=$((attempt + 1))
         done
     fi
     log 'local DNS verification or restart failed, restoring previous resolver'

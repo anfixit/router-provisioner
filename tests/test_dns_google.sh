@@ -22,7 +22,12 @@ uci() {
     esac
 }
 google_dns_ready() { "$pre"; }
-local_dns_ready() { "$post"; }
+checks=0
+local_dns_ready() {
+    checks=$((checks + 1))
+    "$post" && [ "$checks" -ge 6 ]
+}
+log() { :; }
 sleep() { :; }
 pre=false
 if switch_google_dns; then exit 1; fi
@@ -32,6 +37,7 @@ post=false
 if switch_google_dns; then exit 1; fi
 [ "$resolver" = old ] && [ ! -e "$DNS_PENDING" ] || exit 1
 post=true
+checks=0
 switch_google_dns
 [ "$resolver" = dns.google/dns-query ] && [ ! -e "$DNS_PENDING" ] || exit 1
 switch_google_dns
