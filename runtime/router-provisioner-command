@@ -489,6 +489,67 @@ apply_move() {
     log "moved to $new_url"
 }
 
+# Keep the old value until the running resolver has passed its checks. The
+# next cron invocation also restores it if this process or the router dies.
+DNS_PENDING=/etc/router-provisioner/dns-server.pending
+DNS_PROBES='dzen.ru vk.com www.youtube.com'
+
+restore_dns() {
+    previous=$(cat "$DNS_PENDING") && [ -n "$previous" ] &&
+        uci set "netshift.settings.dns_server=$previous" &&
+        uci commit netshift &&
+        /etc/init.d/netshift restart >/dev/null 2>&1 &&
+        rm -f "$DNS_PENDING"
+}
+
+google_dns_ready() {
+    for domain in $DNS_PROBES; do
+        curl --noproxy '*' --resolve dns.google:443:8.8.8.8 -4fsS --max-time 6 \
+            "https://dns.google/resolve?name=$domain&type=A" 2>/dev/null |
+            jq -e '.Status == 0 and any(.Answer[]?; .type == 1)' >/dev/null || return 1
+    done
+}
+
+local_dns_ready() {
+    pgrep -f '[s]ing-box run' >/dev/null || return 1
+    jq -e 'any(.dns.servers[]?; .type == "https" and .server == "dns.google")' \
+        /etc/sing-box/config.json >/dev/null || return 1
+    for domain in $DNS_PROBES; do
+        nslookup -type=A "$domain" 127.0.0.1 2>/dev/null |
+            awk '/^Name:/ {answer=1} answer && /^Address/ {found=1} END {exit !found}' || return 1
+    done
+}
+
+switch_google_dns() {
+    [ "$(uci -q get netshift.settings.dns_type)" = doh ] || return 1
+    previous=$(uci -q get netshift.settings.dns_server) && [ -n "$previous" ] || return 1
+    google_dns_ready || { log "Google DoH preflight failed"; return 1; }
+    if [ "$previous" = dns.google/dns-query ]; then
+        local_dns_ready
+        return $?
+    fi
+    [ -z "$(uci changes netshift)" ] || { log "pending NetShift edits, skipping DNS switch"; return 1; }
+    (umask 077; printf '%s\n' "$previous" > "$DNS_PENDING.new") &&
+        mv "$DNS_PENDING.new" "$DNS_PENDING" || return 1
+    if uci set 'netshift.settings.dns_server=dns.google/dns-query' &&
+        uci commit netshift && /etc/init.d/netshift restart >/dev/null 2>&1; then
+        for attempt in 1 2 3; do
+            if local_dns_ready; then
+                rm -f "$DNS_PENDING"
+                return $?
+            fi
+            sleep 2
+        done
+    fi
+    log 'local DNS verification or restart failed, restoring previous resolver'
+    restore_dns || log 'DNS rollback pending, will retry on next poll'
+    return 1
+}
+
+if [ -f "$DNS_PENDING" ]; then
+    restore_dns || { log 'DNS rollback failed, will retry on next poll'; exit 1; }
+fi
+
 # The hub first: it is reachable without the tunnel, so it still answers when
 # Telegram cannot. A task is one word from a fixed list, never a command.
 if [ "$HUB" -eq 1 ]; then
@@ -517,6 +578,13 @@ if [ "$HUB" -eq 1 ]; then
             [ -x /usr/bin/router-provisioner-upgrade ] && \
                 /usr/bin/router-provisioner-upgrade >/dev/null 2>&1
             reply "$(printf 'после обновления\n%s' "$(state_report)")"
+            ;;
+        dns-google)
+            if switch_google_dns; then
+                log 'Google DoH verified'
+            else
+                log 'Google DoH switch unsuccessful'
+            fi
             ;;
         resub)
             # The node addresses live in the subscription, and a router only

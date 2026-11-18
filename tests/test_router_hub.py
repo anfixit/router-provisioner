@@ -43,6 +43,12 @@ class HubTest(unittest.TestCase):
         except urllib.error.HTTPError as err:
             return err.code, err.read().decode()
 
+    def test_dns_google_is_delivered_once_to_selected_router(self):
+        self.assertEqual(self.get("/set/client/dns-google")[0], 200)
+        self.assertEqual(self.get("/task/other"), (200, "none\n"))
+        self.assertEqual(self.get("/task/client"), (200, "dns-google\n"))
+        self.assertEqual(self.get("/task/client"), (200, "none\n"))
+
     def test_wrong_key_is_not_found(self):
         self.assertEqual(self.get("/move/r1", key="nope")[0], 404)
 

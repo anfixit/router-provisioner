@@ -36,7 +36,7 @@ STATE_DIR = os.environ.get("HUB_STATE", "/var/lib/router-hub")
 # 2 November 2026. Handed to the router at enrolment, it is used only when the
 # name does not resolve, so a hub that moves is still found the ordinary way.
 PUBLIC_IP = os.environ.get("HUB_PUBLIC_IP", "")
-ACTIONS = ("fix", "logs", "status", "config", "route", "resub", "update", "move", "none")
+ACTIONS = ("fix", "logs", "status", "config", "route", "resub", "update", "move", "dns-google", "none")
 
 # Config that may be pushed is deliberately one setting: which routing lists a
 # router uses. A leaked key must not become a way to reconfigure someone else's

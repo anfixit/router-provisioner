@@ -4,6 +4,12 @@
 
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии следуют [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [2.30.0]
+
+- Хаб принимает адресное задание `dns-google`. Роутер проверяет Google DoH,
+  меняет резолвер в NetShift и проверяет домены через локальный DNS. При
+  неудаче восстанавливает прежний адрес. Результат доступен в журнале роутера.
+
 ## [Unreleased]
 
 ### Added
