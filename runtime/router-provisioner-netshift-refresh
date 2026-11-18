@@ -28,6 +28,11 @@ mkdir -p "$BACKUP"
 [ -f /etc/sing-box/config.json ] && \
     cp -p /etc/sing-box/config.json "$BACKUP/config.json"
 
+# Re-apply the generator corrections first: subscription_update regenerates
+# config.json, so a correction lost to a NetShift upgrade is back by morning.
+[ -x /usr/bin/router-provisioner-netshift-patch ] && \
+    /usr/bin/router-provisioner-netshift-patch || true
+
 if ! /usr/bin/netshift subscription_update >/dev/null 2>&1; then
     log 'subscription_update returned an error; validating final state'
 fi

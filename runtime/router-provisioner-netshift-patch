@@ -1,0 +1,128 @@
+#!/bin/ash
+# Corrections router-provisioner makes in NetShift's sing-box config generator.
+#
+# They go into the generator, not into config.json: the generator rewrites
+# config.json on every refresh, while a NetShift upgrade replaces the generator
+# - which is why this helper is run again from the start and refresh helpers
+# instead of once. Each correction is anchored to one exact line of the
+# generator and carries its own marker, so it is applied at most once.
+#
+# 1. The dns-in loop guard.
+#
+# dnsmasq forwards every query to sing-box's dns-in inbound at 127.0.0.42:53.
+# NetShift answers those only through `hijack-dns` matched on the SNIFFED
+# protocol. A packet the sniffer does not recognise as DNS falls through to
+# route.final, which is direct-out - and its destination is still
+# 127.0.0.42:53, so it comes straight back into dns-in, misses the sniffer
+# again and goes round for ever. Nothing ever closes such a loop. On flint2 the
+# router was found with 839 of them, 90 MB each, sing-box on 73% CPU and 9%
+# idle; the home LAN crawled and the first thing to give up every day was the
+# HDrezka app on the TV box. Everything that reaches dns-in is DNS by
+# construction, so it is hijacked by inbound as well.
+#
+# 2. The YouTube device hook.
+#
+# Once every section has its route rules, the finished config is handed to
+# router-provisioner-youtube-devices, which sends YouTube of the devices listed
+# by the owner through the tunnel instead of the direct route. The hook keeps
+# the config as it was whenever that helper is missing or fails.
+#
+# Exit status: 0 when the generator was patched just now (config.json still has
+# to be regenerated), 1 when nothing was changed.
+set -u
+
+TAG='router-provisioner-netshift-patch'
+NETSHIFT_BIN=${NETSHIFT_BIN:-/usr/bin/netshift}
+
+DNS_MARKER='router-provisioner: dns-in loop guard'
+DNS_ANCHOR='config=$(sing_box_cm_add_hijack_dns_route_rule "$config" "protocol" "dns")'
+
+DEVICES_MARKER='router-provisioner: youtube device hook'
+DEVICES_ANCHOR='foreach_active_section configure_routing_for_section_lists "section"'
+
+log() {
+    logger -t "$TAG" "$*" 2>/dev/null || true
+}
+
+[ -f "$NETSHIFT_BIN" ] || exit 1
+
+# Prints the generator with the lines of $3 (an awk program body that prints
+# them) inserted after the single line containing $2. Patches only the
+# generator this was written against: a NetShift that moved or renamed the line
+# may have fixed the problem itself or may need a different fix, and guessing at
+# it could break the config generator for every router at once.
+insert_after_anchor() {
+    source_file=$1
+    anchor=$2
+    lines=$3
+
+    anchors=$(grep -cF "$anchor" "$source_file")
+    if [ "$anchors" -ne 1 ]; then
+        log "anchor found $anchors times in $NETSHIFT_BIN, not patching: $anchor"
+        return 1
+    fi
+
+    awk -v anchor="$anchor" "
+        { print }
+        index(\$0, anchor) { $lines }
+    " "$source_file"
+}
+
+working="$NETSHIFT_BIN.router-provisioner.$$"
+cp -p "$NETSHIFT_BIN" "$working" || exit 1
+changed=0
+
+if ! grep -qF "$DNS_MARKER" "$working"; then
+    if insert_after_anchor "$working" "$DNS_ANCHOR" '
+        print "    # '"$DNS_MARKER"': everything that reaches the DNS inbound is DNS."
+        print "    # A packet the sniffer misses would otherwise go to route.final"
+        print "    # (direct-out) aimed at 127.0.0.42:53 again and loop for ever."
+        print "    local dns_inbounds_csv=\"$SB_DNS_INBOUND_TAG\""
+        print "    netshift_ipv6_enabled && dns_inbounds_csv=\"$dns_inbounds_csv,${SB_DNS_INBOUND_TAG}-v6\""
+        print "    config=$(sing_box_cm_add_hijack_dns_route_rule \"$config\" \"inbound\" \\"
+        print "        \"$(comma_string_to_json_array \"$dns_inbounds_csv\")\")"
+    ' > "$working.next"; then
+        mv "$working.next" "$working"
+        changed=1
+        log 'added the dns-in loop guard to the NetShift config generator'
+    fi
+fi
+
+if ! grep -qF "$DEVICES_MARKER" "$working"; then
+    if insert_after_anchor "$working" "$DEVICES_ANCHOR" '
+        print "    # '"$DEVICES_MARKER"': YouTube of the listed devices goes"
+        print "    # through the tunnel. The config stays as it was if the helper fails."
+        print "    if [ -x /usr/bin/router-provisioner-youtube-devices ]; then"
+        print "        local rp_youtube_config"
+        print "        rp_youtube_config=$(printf \"%s\" \"$config\" | /usr/bin/router-provisioner-youtube-devices) &&"
+        print "            [ -n \"$rp_youtube_config\" ] && config=\"$rp_youtube_config\""
+        print "    fi"
+    ' > "$working.next"; then
+        mv "$working.next" "$working"
+        changed=1
+        log 'added the YouTube device hook to the NetShift config generator'
+    fi
+fi
+
+rm -f "$working.next"
+
+if [ "$changed" -ne 1 ]; then
+    rm -f "$working"
+    exit 1
+fi
+
+# A generator that does not parse would stop NetShift from starting at all, so
+# it never replaces the working one.
+if ! sh -n "$working" 2>/dev/null; then
+    rm -f "$working"
+    log 'patched generator failed the syntax check; keeping the original'
+    exit 1
+fi
+
+chmod 755 "$working"
+# The first backup is the generator as NetShift shipped it; later runs keep it.
+[ -e "$NETSHIFT_BIN.before-router-provisioner" ] || \
+    cp -p "$NETSHIFT_BIN" "$NETSHIFT_BIN.before-router-provisioner" 2>/dev/null || true
+# Rename, never write in place: NetShift may be running this very file.
+mv "$working" "$NETSHIFT_BIN"
+exit 0

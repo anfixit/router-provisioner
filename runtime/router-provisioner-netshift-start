@@ -30,6 +30,16 @@ if ! uci -q get netshift.VPN.subscription_url >/dev/null 2>&1; then
     exit 0
 fi
 
+# The generator corrections live in NetShift's config generator, which a
+# NetShift upgrade replaces. Put them back before deciding anything else; a
+# freshly patched generator only takes effect once config.json is regenerated,
+# so restart.
+if [ -x /usr/bin/router-provisioner-netshift-patch ] && \
+    /usr/bin/router-provisioner-netshift-patch; then
+    log 'NetShift config generator patched; forcing a restart to apply it'
+    FORCE_RESTART=1
+fi
+
 # The uplink may be a Wi-Fi client, wwan or pppoe, so never assume an
 # interface named "wan". A default route alone proves nothing either: early in
 # boot it can point at the LAN bridge before the real uplink is configured.

@@ -8,6 +8,8 @@ UPGRADE_HELPER='/usr/bin/router-provisioner-upgrade'
 REPORT_HELPER='/usr/bin/router-provisioner-report'
 LOGSHIP_HELPER='/usr/bin/router-provisioner-logship'
 COMMAND_HELPER='/usr/bin/router-provisioner-command'
+PATCH_HELPER='/usr/bin/router-provisioner-netshift-patch'
+YOUTUBE_DEVICES_HELPER='/usr/bin/router-provisioner-youtube-devices'
 VERSION_FILE='/etc/router-provisioner/version'
 
 install_lifecycle_helpers() {
@@ -128,6 +130,17 @@ copy_lifecycle_helpers() {
         "$COMMAND_HELPER" || fatal 'Failed to copy the command helper.'
     chmod 700 "$COMMAND_HELPER" || \
         fatal 'Failed to set permissions on the command helper.'
+
+    cp "$_lc_runtime/router-provisioner-netshift-patch" \
+        "$PATCH_HELPER" || fatal 'Failed to copy the NetShift patch helper.'
+    chmod 700 "$PATCH_HELPER" || \
+        fatal 'Failed to set permissions on the NetShift patch helper.'
+
+    cp "$_lc_runtime/router-provisioner-youtube-devices" \
+        "$YOUTUBE_DEVICES_HELPER" || \
+        fatal 'Failed to copy the YouTube devices helper.'
+    chmod 700 "$YOUTUBE_DEVICES_HELPER" || \
+        fatal 'Failed to set permissions on the YouTube devices helper.'
 
     # The router reports its own version, so an outdated router is visible from
     # the monitoring side instead of requiring an ssh session to each one.
