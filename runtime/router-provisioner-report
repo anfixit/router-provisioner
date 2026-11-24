@@ -191,10 +191,32 @@ fi
 # --- nodes ----------------------------------------------------------------
 # Read the delays sing-box already measured rather than probing 26 nodes every
 # five minutes: the urltest groups keep that history current for free.
-BASE=$(api_base || printf '')
-if [ -n "$BASE" ]; then
-    proxies=$(curl -s -m 10 "$BASE/proxies" 2>/dev/null)
+#
+# The report fires on the same minute as other jobs that keep sing-box busy,
+# and on some routers the API misses that exact moment every time while
+# answering a minute later. Ask a few times before giving up, and say that
+# the API was silent: a missing node count otherwise looks like "no data
+# was ever collected" rather than "the API did not answer".
+BASE=''
+proxies=''
+for attempt in 1 2 3; do
+    BASE=$(api_base || printf '')
+    if [ -n "$BASE" ]; then
+        proxies=$(curl -s -m 10 "$BASE/proxies" 2>/dev/null)
+        [ -n "$proxies" ] && break
+    fi
+    [ "$attempt" -lt 3 ] && sleep 10
+done
 
+emit '# TYPE router_clash_api_up gauge'
+if [ -n "$proxies" ]; then
+    metric router_clash_api_up 1
+else
+    metric router_clash_api_up 0
+    log 'sing-box API did not answer three times, node count left out'
+fi
+
+if [ -n "$BASE" ]; then
     if [ -n "$proxies" ]; then
         total=$(printf '%s' "$proxies" | \
             jq '[.proxies[] | select(.type == "VLESS" or .type == "Vless")] | length' \

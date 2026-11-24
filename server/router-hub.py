@@ -255,9 +255,13 @@ def _metric_values(label):
         except (KeyError, ValueError, OverflowError):
             return None
 
-    running = number("singbox_running")
-    return (None if running is None else running == 1,
-            number("nodes_alive"), number("nodes_total"))
+    def flag(name):
+        value = number(name)
+        return None if value is None else value == 1
+
+    # clash_api_up is None for routers on a report that predates it.
+    return (flag("singbox_running"), number("nodes_alive"),
+            number("nodes_total"), flag("clash_api_up"))
 
 
 def router_rows(now):
@@ -276,7 +280,7 @@ def router_rows(now):
             archive_ts = os.path.getmtime(_path("archive", label))
         except OSError:
             archive_ts = None
-        singbox, alive, total = _metric_values(label)
+        singbox, alive, total, clash_api = _metric_values(label)
         rows.append({
             **read_meta(label),
             "label": label,
@@ -287,6 +291,7 @@ def router_rows(now):
             "singbox": singbox,
             "nodes_alive": alive,
             "nodes_total": total,
+            "clash_api": clash_api,
             "task": read_task(label),
             "taken": read_taken(label),
             "replies": read_replies(label)[::-1],

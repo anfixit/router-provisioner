@@ -246,6 +246,14 @@ class HubTest(unittest.TestCase):
         for label in ("g1", "g2", "g3"):
             self.assertIn(label, rows)
 
+    def test_routers_list_tells_silent_api_from_missing_data(self):
+        body = ('router_singbox_running{router="r9"} 1\n'
+                'router_clash_api_up{router="r9"} 0\n')
+        self.assertEqual(self.post("/metrics/r9", body.encode())[0], 200)
+        r9 = self.routers()["r9"]
+        self.assertIs(r9["clash_api"], False)
+        self.assertIsNone(r9["nodes_total"])
+
     def test_meta_text_is_cleaned(self):
         self.assertEqual(hub.clean_text("Анфиса"), "Анфиса")
         self.assertIsNone(hub.clean_text("a\x07b"))
@@ -265,6 +273,7 @@ class HubTest(unittest.TestCase):
         self.assertIs(r7["singbox"], True)
         self.assertEqual((r7["nodes_alive"], r7["nodes_total"]), (41, 73))
         self.assertEqual(r7["version"], "2.31.0")
+        self.assertIsNone(r7["clash_api"])  # a report from before the flag
         self.assertIs(r7["waiting"], False)
         self.assertIs(r8["waiting"], True)
         self.assertIsNone(r8["last_seen"])

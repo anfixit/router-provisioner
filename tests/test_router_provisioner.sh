@@ -117,7 +117,7 @@ ordered' "$layout" \
         'env.example documents the hash'
     assert_contains "$envex" 'router-hub.py --hash-password' \
         'env.example says how to get the hash'
-    assert_equal '2.32.0' "$(cat "$PROJECT_DIR/VERSION")" 'version is bumped'
+    assert_equal '2.32.1' "$(cat "$PROJECT_DIR/VERSION")" 'version is bumped'
     assert_contains "$(cat "$PROJECT_DIR/CHANGELOG.md")" '## [2.31.0]' \
         'changelog has the release'
 }
@@ -1127,6 +1127,13 @@ test_router_reports_its_own_health() {
     # A report nobody receives is the same as no report.
     assert_contains "$report" 'hub did not take the report, twice' \
         'a report must be retried before it is given up on'
+
+    # On AKB_LAB the sing-box API missed every five-minute report while
+    # answering a status task a minute later: ask again, and say it was silent.
+    assert_contains "$report" 'for attempt in 1 2 3' \
+        'the node count must be retried before it is left out'
+    assert_contains "$report" 'metric router_clash_api_up 0' \
+        'a silent sing-box API must be reported, not just leave a gap'
 
     hub=$(cat "$PROJECT_DIR/server/router-hub.py")
     assert_contains "$hub" 'threading.RLock()' \

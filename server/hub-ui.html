@@ -661,6 +661,10 @@ const KIND = {
   ok:      { chip: "В порядке", state: "В порядке" },
 };
 
+// The router reported, but sing-box's API stayed silent through its retries,
+// so it could not say how many nodes answer. Not the same as "no nodes".
+const NO_API = "API sing-box не ответил во время отчёта. Задание «Состояние» спросит заново.";
+
 const $ = (id) => document.getElementById(id);
 let routers = [];
 let serverNow = 0;
@@ -1016,7 +1020,8 @@ function row(r) {
   if (r.waiting) seen = "ещё не был";
   else if (r.last_seen) seen = (r.stale ? "" : "") + ago(r.last_seen);
   const nodes = r.nodes_total === null || r.nodes_total === undefined
-    ? "—" : (r.nodes_alive ?? "?") + "/" + r.nodes_total;
+    ? (r.clash_api === false ? "нет данных" : "—")
+    : (r.nodes_alive ?? "?") + "/" + r.nodes_total;
   const version = r.version && r.version !== "?" ? r.version : "—";
 
   let task = "";
@@ -1038,7 +1043,8 @@ function row(r) {
       el("small", {}, r.name ? el("span", { class: "mono", text: r.label }) : null,
          r.name && r.owner ? " · " : null, r.owner || null)),
     el("span", { class: "cell seen num" + (r.stale ? " bad" : ""), title: r.last_seen ? stamp(r.last_seen) : "", text: seen }),
-    el("span", { class: "cell nodes num" + (r._flags.has("nodes") ? " bad" : ""), text: nodes }),
+    el("span", { class: "cell nodes num" + (r._flags.has("nodes") ? " bad" : ""), text: nodes,
+                 title: r.clash_api === false ? NO_API : "" }),
     el("span", { class: "cell ver mono" + (r._flags.has("old") ? " warn" : ""), text: version }),
     el("span", { class: "taskchip" + (r.task ? " waiting" : ""), text: task }));
 
@@ -1166,8 +1172,10 @@ function renderDetail() {
   else if (r.singbox === false) fact("sing-box", el("dd", { class: "no", text: "не работает" }));
   else fact("sing-box", el("dd", { text: "—" }));
   fact("Узлы", el("dd", { class: r._flags.has("nodes") ? "no" : "",
-    text: r.nodes_total === null || r.nodes_total === undefined ? "—"
-          : (r.nodes_alive ?? "?") + " из " + r.nodes_total + " отвечают" }));
+    text: r.nodes_total !== null && r.nodes_total !== undefined
+          ? (r.nodes_alive ?? "?") + " из " + r.nodes_total + " отвечают"
+          : r.clash_api === false ? "нет данных. " + NO_API
+          : "—" }));
 
   let task = null;
   if (r.task) {
