@@ -82,8 +82,10 @@ test_hub_page_is_wired_into_the_stack() {
     caddy=$(cat "$PROJECT_DIR/server/deploy/Caddyfile")
     compose=$(cat "$PROJECT_DIR/server/deploy/compose.yaml")
     envex=$(cat "$PROJECT_DIR/server/deploy/env.example")
-    assert_contains "$caddy" '@metrics path /hub/metrics /hub/metrics/*' \
+    assert_contains "$caddy" 'path /hub/metrics /hub/metrics/*' \
         'the subpaths of metrics are closed too'
+    assert_contains "$caddy" 'not method POST' \
+        'routers still deliver their reports to /hub/metrics/<label>'
     assert_contains "$caddy" 'redir /hub /hub/ 308' \
         'the address without a trailing slash reaches the page'
     assert_contains "$caddy" 'handle @metrics {' \

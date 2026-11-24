@@ -28,7 +28,11 @@
 
 	# Prometheus-style counters are for the box itself; the proxy must not
 	# hand them to the internet. Matched before the catch-all proxy below.
-	@metrics path /hub/metrics /hub/metrics/*
+	# Routers POST their own report to /hub/metrics/<label>; only reading is closed.
+	@metrics {
+		path /hub/metrics /hub/metrics/*
+		not method POST
+	}
 	handle @metrics {
 		respond 404
 	}
