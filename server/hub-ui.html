@@ -14,48 +14,62 @@
   --bg: #f4f5f7;
   --card: #ffffff;
   --text: #1d2125;
-  --muted: #626f7d;
+  --muted: #5b6774;
   --line: #dde1e6;
   --accent: #2f5fb3;
   --accent-text: #ffffff;
+  --accent-soft: #e6eefb;
   --soft: #eef1f5;
   --bad: #c4321f;
   --bad-soft: #fbe9e6;
+  --warn: #9a5a00;
+  --warn-soft: #fbf0dc;
   --good: #22804a;
   --most: #7a4fb0;
   --most-soft: #f1eaf9;
   --shadow: 0 1px 2px rgba(20, 30, 40, .06);
+  --sheet-shadow: 0 -8px 32px rgba(20, 30, 40, .18);
+  --target: 36px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #15181c;
     --card: #1e2227;
     --text: #e4e7eb;
-    --muted: #96a0ab;
+    --muted: #9aa4af;
     --line: #333a42;
     --accent: #6b9be8;
     --accent-text: #0e1420;
+    --accent-soft: #223149;
     --soft: #272c33;
     --bad: #f07a68;
     --bad-soft: #3a2522;
+    --warn: #e3a54a;
+    --warn-soft: #3a2f1d;
     --good: #5cc78a;
     --most: #c3a2ec;
     --most-soft: #2e2638;
     --shadow: none;
+    --sheet-shadow: 0 -8px 32px rgba(0, 0, 0, .5);
   }
 }
+/* Fingers need bigger targets than a mouse. */
+@media (pointer: coarse) { :root { --target: 44px; } }
+
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scrollbar-color: var(--line) transparent; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
   font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  caret-color: var(--accent);
 }
-button, input { font: inherit; color: inherit; }
+::selection { background: var(--accent-soft); color: var(--text); }
+button, input, select { font: inherit; color: inherit; }
 button {
-  min-height: 36px;
+  min-height: var(--target);
   padding: 6px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -75,7 +89,7 @@ button.link {
   padding: 6px 4px;
   color: var(--accent);
 }
-input[type=text], input[type=password] {
+input[type=text], input[type=password], input[type=search], select {
   width: 100%;
   min-height: 40px;
   padding: 8px 10px;
@@ -83,12 +97,15 @@ input[type=text], input[type=password] {
   border-radius: 8px;
   background: var(--bg);
 }
-input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible {
+input[type=checkbox] { accent-color: var(--accent); }
+input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible,
+select:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-a { color: var(--accent); }
+a { color: var(--accent); text-underline-offset: 2px; }
 .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+.num { font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 
 /* Login */
@@ -105,73 +122,252 @@ a { color: var(--accent); }
 header {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 3;
   background: var(--bg);
   border-bottom: 1px solid var(--line);
 }
-.bar {
-  max-width: 1200px;
+.bar, .tools, .summary, .status, #main {
+  max-width: 1480px;
   margin: 0 auto;
-  padding: 10px 16px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+.bar { display: flex; align-items: center; gap: 8px 12px; padding-top: 10px; }
+.bar h1 { font-size: 18px; margin: 0; margin-right: auto; }
+.tools {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
+  gap: 8px;
+  padding-top: 10px;
 }
-.bar h1 { font-size: 18px; margin: 0; margin-right: auto; }
-.filter { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.filter button { border: 0; border-radius: 0; background: var(--card); }
-.filter button + button { border-left: 1px solid var(--line); }
-.filter button[aria-pressed=true] { background: var(--soft); font-weight: 600; }
+.search { position: relative; flex: 1 1 260px; }
+.search input { padding-right: 34px; }
+.search kbd {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  font: 12px/18px ui-monospace, Menlo, Consolas, monospace;
+  pointer-events: none;
+}
+.search input:focus + kbd, .search input:not(:placeholder-shown) + kbd { display: none; }
+.group { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.group button { border: 0; border-radius: 0; background: var(--card); }
+.group button + button { border-left: 1px solid var(--line); }
+.group button[aria-pressed=true] { background: var(--soft); font-weight: 600; }
+.tools select { width: auto; min-height: var(--target); padding: 6px 8px; background: var(--card); }
+
+/* Summary: one chip per problem, each one a filter. */
+.summary {
+  display: flex;
+  gap: 6px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.chip b { font-variant-numeric: tabular-nums; }
+.chip.zero { color: var(--muted); }
+.chip.zero b { font-weight: 400; }
+.chip[aria-pressed=true] { border-color: var(--accent); background: var(--accent-soft); }
+.chip.k-offline:not(.zero) b, .chip.k-singbox:not(.zero) b, .chip.k-nodes:not(.zero) b { color: var(--bad); }
+.chip.k-old:not(.zero) b { color: var(--warn); }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); }
+.k-offline .dot, .k-singbox .dot, .k-nodes .dot { background: var(--bad); }
+.k-old .dot { background: var(--warn); }
+.k-ok .dot { background: var(--good); }
+.k-wait .dot { background: transparent; border: 2px solid var(--muted); }
+.k-tasks .dot { background: var(--accent); }
+
 .status {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 10px 16px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: center;
+  padding-top: 12px;
   color: var(--muted);
   font-size: 13px;
 }
+.status button.link { font-size: 13px; padding: 0 4px; min-height: 0; }
 
-/* Cards */
-#list {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 12px 16px 32px;
+/* Layout: list, and the router's details beside it on a wide screen. */
+#main {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
   align-items: start;
+  padding-top: 8px;
+  padding-bottom: 96px;
 }
-.card {
+@media (min-width: 1100px) {
+  #main.with-detail { grid-template-columns: minmax(0, 1fr) 420px; }
+}
+
+/* Rows */
+.list {
+  container-type: inline-size;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 14px;
   box-shadow: var(--shadow);
-  display: grid;
-  gap: 10px;
-  min-width: 0;
+  overflow: hidden;
 }
-.card.stale { border-color: var(--bad); }
-.head { display: flex; align-items: flex-start; gap: 8px; }
-.head .who { flex: 1; min-width: 0; }
-.head h2 { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
-.head .sub { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.list ul { list-style: none; margin: 0; padding: 0; }
+.cols, .row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 164px;
+  align-items: center;
+}
+.cols {
+  min-height: 40px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+.cols .open, .row .open {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 120px 64px 76px 150px;
+  gap: 12px;
+  align-items: center;
+  text-align: left;
+}
+.cols .open { padding: 0 12px 0 4px; }
+.pick { display: flex; justify-content: center; align-items: center; align-self: stretch; cursor: pointer; }
+.pick input { width: 18px; height: 18px; margin: 0; cursor: pointer; }
+.pick input:disabled { cursor: default; }
+.row { border-bottom: 1px solid var(--line); }
+.row:last-child { border-bottom: 0; }
+.row.current { background: var(--accent-soft); }
+.row.chosen:not(.current) { background: var(--soft); }
+.row .open {
+  min-height: 52px;
+  padding: 8px 12px 8px 4px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+.row .open:hover { background: var(--soft); }
+.row.current .open:hover { background: none; }
+.state { display: flex; align-items: center; gap: 8px; font-size: 14px; min-width: 0; }
+.state span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-offline .state, .k-singbox .state, .k-nodes .state { color: var(--bad); font-weight: 600; }
+.k-old .state { color: var(--warn); font-weight: 600; }
+.k-ok .state, .k-wait .state { color: var(--muted); }
+.who { min-width: 0; }
+.who strong { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who small { display: block; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge {
-  flex: none;
-  font-size: 12px;
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: .03em;
-  padding: 2px 7px;
+  padding: 1px 6px;
   border-radius: 999px;
   color: var(--most);
   background: var(--most-soft);
+  vertical-align: 2px;
 }
-.seen { font-size: 13px; }
-.seen.bad { color: var(--bad); font-weight: 600; }
+.cell { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell.bad { color: var(--bad); font-weight: 600; }
+.cell.warn { color: var(--warn); font-weight: 600; }
+.taskchip {
+  justify-self: start;
+  max-width: 100%;
+  font-size: 13px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.taskchip.waiting { background: var(--accent-soft); }
+.do { padding: 0 12px 0 0; display: flex; justify-content: flex-end; }
+.do button { font-size: 14px; white-space: nowrap; }
+.fold {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 16px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--soft);
+  font-size: 14px;
+  text-align: left;
+}
+.fold::after { content: ""; margin-left: auto; width: 8px; height: 8px; border: solid var(--muted); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.fold[aria-expanded=true]::after { transform: rotate(-135deg); }
+.empty { text-align: center; color: var(--muted); padding: 40px 16px; margin: 0; }
+.empty button { margin-top: 8px; }
+
+/* Narrow list (phone, or a list squeezed by the details): two lines a row. */
+@container (max-width: 980px) {
+  .cols { display: none; }
+  .row { grid-template-columns: 40px minmax(0, 1fr); }
+  .row .open {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "who seen" "state ver" "task task";
+    gap: 2px 12px;
+  }
+  .row .open .who { grid-area: who; }
+  .row .open .state { grid-area: state; font-size: 13px; }
+  .row .open .seen { grid-area: seen; justify-self: end; font-size: 13px; color: var(--muted); }
+  .row .open .nodes { display: none; }
+  .row .open .ver { grid-area: ver; justify-self: end; font-size: 13px; }
+  .row .open .taskchip { grid-area: task; margin-top: 4px; }
+  .row .open .taskchip:empty { display: none; }
+  .row .do { grid-column: 2; padding: 0 12px 10px 4px; justify-content: flex-start; }
+  .row .do:empty { display: none; }
+}
+
+/* Details */
+.detail {
+  position: sticky;
+  top: calc(var(--header-h, 150px) + 12px);
+  max-height: calc(100vh - var(--header-h, 150px) - 24px);
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+.detail .top { display: flex; align-items: flex-start; gap: 8px; }
+.detail .top .who { flex: 1; }
+.detail h2 { font-size: 18px; margin: 0; overflow-wrap: anywhere; outline: none; }
+.detail .sub { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.close { flex: none; width: var(--target); padding: 0; font-size: 20px; line-height: 1; }
+.verdict { padding: 10px 12px; border-radius: 8px; font-size: 14px; background: var(--soft); }
+.verdict strong { display: block; }
+.verdict.k-offline, .verdict.k-singbox, .verdict.k-nodes { background: var(--bad-soft); }
+.verdict.k-offline strong, .verdict.k-singbox strong, .verdict.k-nodes strong { color: var(--bad); }
+.verdict.k-old { background: var(--warn-soft); }
+.verdict.k-old strong { color: var(--warn); }
 .facts {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 2px 12px;
+  gap: 4px 12px;
   margin: 0;
   font-size: 14px;
 }
@@ -180,12 +376,17 @@ header {
 .ok { color: var(--good); }
 .no { color: var(--bad); }
 .task { font-size: 13px; padding: 6px 10px; border-radius: 8px; background: var(--soft); }
+.acts { display: grid; gap: 8px; }
+.acts h3, .replies h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0; }
+.acts .buttons { justify-content: flex-start; }
+.acts .hint { margin: 0; }
 .reply { display: grid; gap: 4px; }
 .reply .when { font-size: 12px; color: var(--muted); }
-.reply pre, details pre {
+.replies { display: grid; gap: 8px; }
+.reply pre {
   margin: 0;
   padding: 8px 10px;
-  max-height: 220px;
+  max-height: 260px;
   overflow: auto;
   border-radius: 8px;
   background: var(--soft);
@@ -193,13 +394,57 @@ header {
   overflow-wrap: anywhere;
   font: 12.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
-details summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+details summary { cursor: pointer; font-size: 13px; color: var(--accent); min-height: 28px; display: flex; align-items: center; }
 details .reply { margin-top: 8px; }
 .archive { font-size: 13px; }
-.actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.actions button { font-size: 14px; }
-.foot { display: flex; justify-content: flex-end; }
-.empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 40px 0; }
+.edit { justify-self: start; }
+#backdrop { display: none; }
+
+/* Phone: the details slide up as a sheet over the list. */
+@media (max-width: 1099px) {
+  .detail {
+    position: fixed;
+    z-index: 5;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    max-height: 88vh;
+    border-radius: 16px 16px 0 0;
+    border-bottom: 0;
+    box-shadow: var(--sheet-shadow);
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  #backdrop:not([hidden]) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 4;
+    background: rgba(0, 0, 0, .35);
+  }
+}
+
+/* Bulk bar */
+#bulk {
+  position: fixed;
+  z-index: 3;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: min(920px, calc(100vw - 24px));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--sheet-shadow);
+}
+#bulk .count { font-weight: 600; margin-right: auto; }
+#bulk .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+#bulk button { font-size: 14px; }
 
 /* Dialogs */
 dialog {
@@ -235,6 +480,7 @@ label.check input { width: 18px; height: 18px; margin: 0; }
 /* Toast */
 #toast {
   position: fixed;
+  z-index: 6;
   left: 50%;
   bottom: 16px;
   transform: translateX(-50%);
@@ -247,6 +493,14 @@ label.check input { width: 18px; height: 18px; margin: 0; }
   box-shadow: 0 4px 16px rgba(0, 0, 0, .2);
 }
 #toast.bad { background: var(--bad); color: #fff; }
+
+@media (max-width: 600px) {
+  /* A sticky header would eat a third of a phone screen; let it scroll away. */
+  header { position: static; }
+  .bar h1 { font-size: 17px; }
+  #enroll-open .long { display: none; }
+  .tools .group { order: 3; }
+}
 </style>
 </head>
 <body>
@@ -266,19 +520,38 @@ label.check input { width: 18px; height: 18px; margin: 0; }
   <header>
     <div class="bar">
       <h1>Хаб роутеров</h1>
-      <div class="filter" role="group" aria-label="Какие роутеры показать">
-        <button type="button" data-filter="all" aria-pressed="true">Все</button>
-        <button type="button" data-filter="most" aria-pressed="false">MOST</button>
-        <button type="button" data-filter="own" aria-pressed="false">Личные</button>
-      </div>
-      <button type="button" class="primary" id="enroll-open">Подключить новый</button>
+      <button type="button" class="primary" id="enroll-open">Подключить<span class="long"> новый</span></button>
       <form id="logout-form" method="post" action="ui/logout">
         <button type="submit" class="link">Выйти</button>
       </form>
     </div>
+    <div class="tools">
+      <div class="search" role="search">
+        <input type="search" id="q" placeholder="Имя, метка, владелец или версия"
+               aria-label="Поиск роутера" autocomplete="off" spellcheck="false">
+        <kbd aria-hidden="true">/</kbd>
+      </div>
+      <div class="group" role="group" aria-label="Какие роутеры показать">
+        <button type="button" data-group="all" aria-pressed="true">Все</button>
+        <button type="button" data-group="most" aria-pressed="false">MOST</button>
+        <button type="button" data-group="own" aria-pressed="false">Личные</button>
+      </div>
+      <select id="sort" aria-label="Порядок">
+        <option value="health">Сначала проблемы</option>
+        <option value="name">По имени</option>
+        <option value="seen">Давно не на связи</option>
+        <option value="version">По версии</option>
+      </select>
+    </div>
+    <div class="summary" id="summary" role="group" aria-label="Состояние роутеров"></div>
   </header>
   <div class="status" id="status" aria-live="polite"></div>
-  <div id="list"></div>
+  <div id="main">
+    <section class="list" id="list" aria-label="Роутеры"></section>
+    <aside class="detail" id="detail" aria-label="Роутер" hidden></aside>
+  </div>
+  <div id="backdrop" hidden></div>
+  <div id="bulk" role="region" aria-label="Действия с выбранными" hidden></div>
 </div>
 
 <dialog id="enroll">
@@ -327,7 +600,7 @@ label.check input { width: 18px; height: 18px; margin: 0; }
 </dialog>
 
 <dialog id="meta">
-  <h2>Подписать <span class="mono" id="meta-label"></span></h2>
+  <h2>Подпись <span class="mono" id="meta-label"></span></h2>
   <form id="meta-form">
     <label class="field">Имя
       <input type="text" name="name" maxlength="64" autocomplete="off">
@@ -354,12 +627,13 @@ label.check input { width: 18px; height: 18px; margin: 0; }
 
 const POLL_MS = 30000;
 const ACTIONS = [
-  ["logs", "Логи"],
-  ["update", "Обновить"],
-  ["fix", "Починить"],
   ["status", "Состояние"],
+  ["logs", "Логи"],
   ["resub", "Обновить подписку"],
+  ["fix", "Починить"],
+  ["update", "Обновить скрипты"],
 ];
+const ACTION_LABEL = Object.fromEntries(ACTIONS);
 const ACTION_NAMES = {
   logs: "логи", update: "обновление", fix: "починка", status: "состояние",
   resub: "обновление подписки", config: "настройки", route: "маршруты",
@@ -371,18 +645,33 @@ const CONFIRM = {
   fix: "Запустить починку на роутере?",
 };
 
+// One health state per router, worst first. A router can have several
+// problems; the first one that holds is the one it is sorted and shown by.
+const KINDS = ["offline", "singbox", "nodes", "old", "wait", "ok"];
+const KIND = {
+  offline: { chip: "Не на связи", state: "Не на связи" },
+  singbox: { chip: "sing-box", state: "sing-box упал", act: "fix",
+             why: "VPN на роутере не запущен. Починка перезапустит его." },
+  nodes:   { chip: "Нет узлов", state: "Нет живых узлов", act: "resub",
+             why: "Ни один узел не отвечает. Чаще всего помогает обновить подписку." },
+  old:     { chip: "Старая версия", state: "Старая версия", act: "update",
+             why: "Скрипты старее, чем на других роутерах." },
+  wait:    { chip: "Ждут подключения", state: "Ждёт подключения",
+             why: "Код выдан, роутер ещё ни разу не выходил на связь." },
+  ok:      { chip: "В порядке", state: "В порядке" },
+};
+
 const $ = (id) => document.getElementById(id);
 let routers = [];
 let serverNow = 0;
-let filter = "all";
+let newest = null;
 let timer = null;
 let polling = false;
+let current = "";          // label shown in the details
+let showHealthy = false;
+const chosen = new Set();  // labels ticked for a bulk task
 const openReplies = new Set();
-
-try {
-  const saved = localStorage.getItem("hub-filter");
-  if (saved === "most" || saved === "own") filter = saved;
-} catch (e) { /* storage blocked: default filter */ }
+const view = { q: "", kind: "", group: "all", sort: "health" };
 
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
@@ -408,13 +697,14 @@ function stamp(ts) {
   const d = new Date(ts * 1000);
   return pad(d.getDate()) + "." + pad(d.getMonth() + 1) + " " + hhmm(ts);
 }
-function ago(ts) {
+function ago(ts, short) {
   const min = Math.max(0, Math.floor((serverNow - ts) / 60));
+  const tail = short ? "" : " назад";
   if (min < 1) return "только что";
-  if (min < 60) return min + " мин назад";
+  if (min < 60) return min + " мин" + tail;
   const hours = Math.floor(min / 60);
-  if (hours < 48) return hours + " ч назад";
-  return Math.floor(hours / 24) + " дн назад";
+  if (hours < 48) return hours + " ч" + tail;
+  return Math.floor(hours / 24) + " дн" + tail;
 }
 
 let toastTimer = null;
@@ -424,7 +714,78 @@ function toast(text, bad) {
   box.classList.toggle("bad", !!bad);
   box.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { box.hidden = true; }, bad ? 6000 : 3000);
+  toastTimer = setTimeout(() => { box.hidden = true; }, bad ? 6000 : 3500);
+}
+
+// --- health ----------------------------------------------------------------
+
+function parseVersion(v) {
+  return typeof v === "string" && /^\d+(\.\d+)*$/.test(v) ? v.split(".").map(Number) : null;
+}
+function cmpVersion(a, b) {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] || 0) - (b[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+function flags(r) {
+  const out = new Set();
+  if (r.waiting) { out.add("wait"); return out; }
+  if (r.stale) out.add("offline");
+  if (r.singbox === false) out.add("singbox");
+  if (r.nodes_total > 0 && r.nodes_alive === 0) out.add("nodes");
+  const v = parseVersion(r.version);
+  if (v && newest && cmpVersion(v, newest) < 0) out.add("old");
+  if (!out.size) out.add("ok");
+  return out;
+}
+const kindOf = (r) => KINDS.find((k) => r._flags.has(k));
+
+function prepare() {
+  newest = null;
+  for (const r of routers) {
+    const v = parseVersion(r.version);
+    if (v && (!newest || cmpVersion(v, newest) > 0)) newest = v;
+  }
+  for (const r of routers) {
+    r._flags = flags(r);
+    r._kind = kindOf(r);
+    r._title = r.name || r.label;
+    r._hay = [r.name, r.label, r.owner, r.version].join(" ").toLowerCase();
+  }
+}
+
+// --- view state, kept in the address so a view can be bookmarked ----------
+
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  view.q = p.get("q") || "";
+  view.kind = KINDS.includes(p.get("s")) || p.get("s") === "tasks" ? p.get("s") : "";
+  view.group = ["most", "own"].includes(p.get("g")) ? p.get("g") : "all";
+  view.sort = ["name", "seen", "version"].includes(p.get("o")) ? p.get("o") : "health";
+  if (!p.has("g")) {
+    try {
+      const saved = localStorage.getItem("hub-filter");
+      if (saved === "most" || saved === "own") view.group = saved;
+    } catch (e) { /* storage blocked: default group */ }
+  }
+}
+function writeHash() {
+  const p = new URLSearchParams();
+  if (view.q) p.set("q", view.q);
+  if (view.kind) p.set("s", view.kind);
+  if (view.group !== "all") p.set("g", view.group);
+  if (view.sort !== "health") p.set("o", view.sort);
+  const hash = p.toString();
+  history.replaceState(null, "", hash ? "#" + hash : location.pathname + location.search);
+  try { localStorage.setItem("hub-filter", view.group); } catch (e) { /* fine */ }
+}
+function setView(change) {
+  Object.assign(view, change);
+  writeHash();
+  render();
 }
 
 // --- polling -------------------------------------------------------------
@@ -459,6 +820,8 @@ document.addEventListener("visibilitychange", () => {
 function loggedOut() {
   stopPolling();
   for (const d of document.querySelectorAll("dialog")) if (d.open) d.close();
+  closeDetail(false);
+  chosen.clear();
   $("app").hidden = true;
   $("login").hidden = false;
   $("login-form").password.focus();
@@ -466,9 +829,11 @@ function loggedOut() {
 
 // A hub that is down is not a reason to ask for the password again: show the
 // (possibly empty) list with the reason and keep trying.
-function trouble(text) {
-  $("status").textContent = text;
+let trouble = "";
+function setTrouble(text) {
+  trouble = text;
   if ($("login").hidden) $("app").hidden = false;
+  renderStatus();
 }
 
 async function load() {
@@ -476,29 +841,33 @@ async function load() {
   try {
     response = await fetch("ui/api/routers", { cache: "no-store" });
   } catch (e) {
-    trouble("Хаб не отвечает, попробуем ещё раз через 30 секунд.");
+    setTrouble("Хаб не отвечает, попробуем ещё раз через 30 секунд.");
     return;
   }
   if (response.status === 401) { loggedOut(); return; }
   // 403/404 mean the page is off on the hub; polling on would feed fail2ban.
   if (response.status === 403 || response.status === 404) {
     stopPolling();
-    trouble("Страница выключена на хабе. Включите её и обновите вкладку.");
+    setTrouble("Страница выключена на хабе. Включите её и обновите вкладку.");
     return;
   }
   if (!response.ok) {
-    trouble("Хаб ответил ошибкой " + response.status + ".");
+    setTrouble("Хаб ответил ошибкой " + response.status + ".");
     return;
   }
   let data;
   try {
     data = await response.json();
   } catch (e) {
-    trouble("Хаб ответил не так, как ждали. Попробуем ещё раз через 30 секунд.");
+    setTrouble("Хаб ответил не так, как ждали. Попробуем ещё раз через 30 секунд.");
     return;
   }
   routers = Array.isArray(data.routers) ? data.routers : [];
   serverNow = data.now;
+  trouble = "";
+  prepare();
+  const known = new Set(routers.map((r) => r.label));
+  for (const label of [...chosen]) if (!known.has(label)) chosen.delete(label);
   $("login").hidden = true;
   $("app").hidden = false;
   render();
@@ -527,39 +896,245 @@ async function post(path, body) {
   return { ok: true, data };
 }
 
-async function queue(router, action, label, button) {
-  if (CONFIRM[action] && !confirm(CONFIRM[action] + "\n" + (router.name || router.label))) return;
+async function queue(router, action, button) {
+  if (CONFIRM[action] && !confirm(CONFIRM[action] + "\n" + router._title)) return;
   button.disabled = true;
   const result = await post("ui/api/task", { label: router.label, action });
   button.disabled = false;
   if (result.ok) {
-    toast("Поставлено: " + label + ". Роутер заберёт задание в течение минуты.");
+    toast("Поставлено: " + ACTION_LABEL[action].toLowerCase() + ". "
+          + (router.stale ? "Роутер заберёт задание, когда выйдет на связь."
+                          : "Роутер заберёт задание в течение минуты."));
     load();
   } else if (result.error) {
     toast(result.error, true);
   }
 }
 
-// --- rendering -------------------------------------------------------------
-
-function visible(router) {
-  if (filter === "most") return router.most === true;
-  if (filter === "own") return router.most !== true;
-  return true;
+async function queueMany(action, button) {
+  const list = routers.filter((r) => chosen.has(r.label) && !r.waiting);
+  if (!list.length) return;
+  const names = list.slice(0, 12).map((r) => "• " + r._title);
+  if (list.length > 12) names.push("и ещё " + (list.length - 12));
+  const offline = list.filter((r) => r.stale).length;
+  const text = ACTION_LABEL[action] + ": " + list.length + " шт.\n\n" + names.join("\n")
+    + (offline ? "\n\nНе на связи: " + offline + ", заберут задание позже." : "");
+  if (!confirm(text)) return;
+  button.disabled = true;
+  const result = await post("ui/api/tasks", { labels: list.map((r) => r.label), action });
+  button.disabled = false;
+  if (result.ok) {
+    toast("Поставлено на " + result.data.count + " роутеров: "
+          + ACTION_LABEL[action].toLowerCase() + ".");
+    chosen.clear();
+    load();
+  } else if (result.error) {
+    toast(result.error, true);
+  }
 }
 
-function renderFilter() {
-  const counts = {
-    all: routers.length,
-    most: routers.filter((r) => r.most === true).length,
+// --- filtering -------------------------------------------------------------
+
+const inGroup = (r) => view.group === "most" ? r.most === true
+  : view.group === "own" ? r.most !== true : true;
+const hasTask = (r) => !!r.task;
+const matches = (r) => !view.q || view.q.toLowerCase().split(/\s+/).every((w) => r._hay.includes(w));
+function inKind(r) {
+  if (!view.kind) return true;
+  if (view.kind === "tasks") return hasTask(r);
+  return r._flags.has(view.kind);
+}
+
+function sorted(list) {
+  const byName = (a, b) => a._title.localeCompare(b._title, "ru");
+  const by = {
+    health: (a, b) => KINDS.indexOf(a._kind) - KINDS.indexOf(b._kind)
+      || (a.last_seen || 0) - (b.last_seen || 0) || byName(a, b),
+    name: byName,
+    seen: (a, b) => (a.last_seen ?? Infinity) - (b.last_seen ?? Infinity) || byName(a, b),
+    version: (a, b) => {
+      const va = parseVersion(a.version), vb = parseVersion(b.version);
+      if (!va || !vb) return (va ? -1 : 0) + (vb ? 1 : 0) || byName(a, b);
+      return cmpVersion(va, vb) || byName(a, b);
+    },
   };
+  return list.slice().sort(by[view.sort]);
+}
+
+// --- rendering -------------------------------------------------------------
+
+function renderControls() {
+  const q = $("q");
+  if (document.activeElement !== q && q.value !== view.q) q.value = view.q;
+  $("sort").value = view.sort;
+  const base = routers.filter(inGroup);
+  const counts = { all: routers.length, most: routers.filter((r) => r.most === true).length };
   counts.own = counts.all - counts.most;
   const names = { all: "Все", most: "MOST", own: "Личные" };
-  for (const button of document.querySelectorAll("[data-filter]")) {
-    const key = button.dataset.filter;
-    button.setAttribute("aria-pressed", String(key === filter));
+  for (const button of document.querySelectorAll("[data-group]")) {
+    const key = button.dataset.group;
+    button.setAttribute("aria-pressed", String(key === view.group));
     button.textContent = names[key] + " " + counts[key];
   }
+  const chips = [...KINDS.filter((k) => k !== "ok"), "tasks", "ok"].map((k) => {
+    const n = base.filter((r) => k === "tasks" ? hasTask(r) : r._flags.has(k)).length;
+    const label = k === "tasks" ? "Ждут задания" : KIND[k].chip;
+    return el("button", {
+      type: "button",
+      class: "chip k-" + k + (n ? "" : " zero"),
+      "aria-pressed": String(view.kind === k),
+      "aria-label": label + ": " + n,
+      onclick: () => setView({ kind: view.kind === k ? "" : k }),
+    }, el("span", { class: "dot", "aria-hidden": "true" }), label, el("b", { text: String(n) }));
+  });
+  $("summary").replaceChildren(...chips);
+}
+
+function renderStatus(shown, total) {
+  const parts = [];
+  if (trouble) parts.push(el("span", { class: "no", text: trouble }));
+  else if (serverNow) parts.push(el("span", { class: "num", text: "Обновлено в " + hhmm(serverNow) }));
+  if (shown !== undefined && (view.q || view.kind)) {
+    parts.push(el("span", { class: "num", text: "Показано " + shown + " из " + total }));
+    parts.push(el("button", { type: "button", class: "link", text: "Сбросить фильтры",
+                              onclick: () => setView({ q: "", kind: "" }) }));
+  }
+  $("status").replaceChildren(...parts);
+}
+
+function row(r) {
+  const k = r._kind;
+  const pick = el("input", { type: "checkbox", "aria-label": "Выбрать " + r._title });
+  pick.checked = chosen.has(r.label);
+  pick.disabled = !!r.waiting;
+  pick.addEventListener("change", () => {
+    if (pick.checked) chosen.add(r.label); else chosen.delete(r.label);
+    render();
+  });
+
+  let seen = "—";
+  if (r.waiting) seen = "ещё не был";
+  else if (r.last_seen) seen = (r.stale ? "" : "") + ago(r.last_seen);
+  const nodes = r.nodes_total === null || r.nodes_total === undefined
+    ? "—" : (r.nodes_alive ?? "?") + "/" + r.nodes_total;
+  const version = r.version && r.version !== "?" ? r.version : "—";
+
+  let task = "";
+  if (r.task) task = "Ждёт: " + (ACTION_NAMES[r.task] || r.task);
+  else if (r.taken) task = "Забрано " + hhmm(r.taken.ts) + ": " + (ACTION_NAMES[r.taken.action] || r.taken.action);
+
+  const open = el("button", {
+    type: "button",
+    class: "open",
+    "aria-label": r._title + ", " + KIND[k].state,
+    "aria-expanded": String(current === r.label),
+    "aria-controls": "detail",
+    onclick: () => openDetail(r.label),
+  },
+    el("span", { class: "state" }, el("span", { class: "dot", "aria-hidden": "true" }),
+       el("span", { text: KIND[k].state })),
+    el("span", { class: "who" },
+      el("strong", {}, r._title, r.most === true ? el("span", { class: "badge", text: "MOST" }) : null),
+      el("small", {}, r.name ? el("span", { class: "mono", text: r.label }) : null,
+         r.name && r.owner ? " · " : null, r.owner || null)),
+    el("span", { class: "cell seen num" + (r.stale ? " bad" : ""), title: r.last_seen ? stamp(r.last_seen) : "", text: seen }),
+    el("span", { class: "cell nodes num" + (r._flags.has("nodes") ? " bad" : ""), text: nodes }),
+    el("span", { class: "cell ver mono" + (r._flags.has("old") ? " warn" : ""), text: version }),
+    el("span", { class: "taskchip" + (r.task ? " waiting" : ""), text: task }));
+
+  const act = KIND[k].act;
+  const doCell = el("div", { class: "do" });
+  if (act) {
+    const button = el("button", { type: "button", text: ACTION_LABEL[act] });
+    button.addEventListener("click", () => queue(r, act, button));
+    doCell.append(button);
+  }
+
+  return el("li", {
+    class: "row k-" + k + (current === r.label ? " current" : "") + (chosen.has(r.label) ? " chosen" : ""),
+    "data-label": r.label,
+  }, el("label", { class: "pick" }, pick), open, doCell);
+}
+
+function renderList() {
+  const box = $("list");
+  if (!routers.length) {
+    box.replaceChildren(el("p", { class: "empty",
+      text: "Роутеров пока нет. Нажмите «Подключить новый»." }));
+    renderStatus();
+    return;
+  }
+  const base = routers.filter(inGroup);
+  const shown = sorted(base.filter((r) => matches(r) && inKind(r)));
+  renderStatus(shown.length, base.length);
+  if (!shown.length) {
+    box.replaceChildren(el("div", { class: "empty" },
+      el("p", { text: view.q ? "Ничего не нашлось по «" + view.q + "»." : "Здесь роутеров нет." }),
+      el("button", { type: "button", text: "Сбросить фильтры",
+                     onclick: () => setView({ q: "", kind: "" }) })));
+    return;
+  }
+
+  // Healthy routers fold away when nothing narrows the list: the screen is
+  // for the ones that need attention.
+  const fold = view.sort === "health" && !view.q && !view.kind;
+  const top = fold ? shown.filter((r) => r._kind !== "ok") : shown;
+  const healthy = fold ? shown.filter((r) => r._kind === "ok") : [];
+
+  const pickable = shown.filter((r) => !r.waiting);
+  const all = el("input", { type: "checkbox", "aria-label": "Выбрать все показанные" });
+  all.checked = pickable.length > 0 && pickable.every((r) => chosen.has(r.label));
+  all.indeterminate = !all.checked && pickable.some((r) => chosen.has(r.label));
+  all.addEventListener("change", () => {
+    for (const r of pickable) { if (all.checked) chosen.add(r.label); else chosen.delete(r.label); }
+    render();
+  });
+  const head = el("div", { class: "cols", "aria-hidden": "false" },
+    el("label", { class: "pick" }, all),
+    el("div", { class: "open" },
+      el("span", { text: "Состояние" }), el("span", { text: "Роутер" }),
+      el("span", { text: "На связи" }), el("span", { text: "Узлы" }),
+      el("span", { text: "Версия" }), el("span", { text: "Задание" })),
+    el("span", {}));
+
+  const parts = [head, el("ul", {}, ...top.map(row))];
+  if (healthy.length) {
+    const toggle = el("button", { type: "button", class: "fold k-ok",
+      "aria-expanded": String(showHealthy),
+      onclick: () => { showHealthy = !showHealthy; render(); } },
+      el("span", { class: "dot", "aria-hidden": "true" }),
+      (top.length ? "Остальные в порядке: " : "Все в порядке: ") + healthy.length);
+    parts.push(toggle);
+    if (showHealthy) parts.push(el("ul", {}, ...healthy.map(row)));
+  }
+  const focused = document.activeElement && document.activeElement.closest
+    ? document.activeElement.closest(".row") : null;
+  const focusLabel = focused ? focused.dataset.label : "";
+  const focusClass = focused ? (document.activeElement.className || document.activeElement.type) : "";
+  box.replaceChildren(...parts);
+  // A redraw every 30 seconds must not throw the keyboard focus away.
+  if (focusLabel) {
+    const again = box.querySelector('.row[data-label="' + CSS.escape(focusLabel) + '"]');
+    const target = again && (focusClass === "checkbox" ? again.querySelector("input")
+      : again.querySelector("." + focusClass) || again.querySelector(".open"));
+    if (target) target.focus({ preventScroll: true });
+  }
+}
+
+function renderBulk() {
+  const bar = $("bulk");
+  const list = routers.filter((r) => chosen.has(r.label));
+  if (!list.length) { bar.hidden = true; return; }
+  bar.hidden = false;
+  bar.replaceChildren(
+    el("span", { class: "count", text: "Выбрано: " + list.length }),
+    el("div", { class: "buttons" }, ...ACTIONS.map(([action, label]) => {
+      const button = el("button", { type: "button", text: label });
+      button.addEventListener("click", () => queueMany(action, button));
+      return button;
+    })),
+    el("button", { type: "button", class: "link", text: "Снять выбор",
+                   onclick: () => { chosen.clear(); render(); } }));
 }
 
 function replyBlock(reply) {
@@ -568,100 +1143,139 @@ function replyBlock(reply) {
     el("pre", { text: String(reply.text) }));
 }
 
-function card(router) {
-  const title = router.name || router.label;
-  const head = el("div", { class: "head" },
-    el("div", { class: "who" },
-      el("h2", { text: title }),
-      el("div", { class: "sub" },
-        router.name ? el("span", { class: "mono", text: router.label }) : null,
-        router.name && router.owner ? " · " : null,
-        router.owner ? router.owner : null)),
-    router.most === true ? el("span", { class: "badge", text: "MOST" }) : null);
+function renderDetail() {
+  const box = $("detail");
+  const r = routers.find((x) => x.label === current);
+  if (!r) { if (current) closeDetail(false); return; }
+  const k = r._kind;
 
-  let seen;
-  if (router.waiting) seen = el("div", { class: "seen muted", text: "ждём подключения" });
-  else seen = el("div", { class: "seen" + (router.stale ? " bad" : " muted"),
-                          title: stamp(router.last_seen),
-                          text: (router.stale ? "Не на связи: " : "На связи ") + ago(router.last_seen) });
+  const verdictText = r.waiting ? KIND.wait.why
+    : r.stale ? "Последний раз выходил на связь " + ago(r.last_seen) + " (" + stamp(r.last_seen) + "). "
+                + "Задания подождут, пока он не вернётся."
+    : KIND[k].why || "Последний отчёт " + ago(r.last_seen) + ".";
+  const other = [...r._flags].filter((f) => f !== k && f !== "ok").map((f) => KIND[f].state);
 
   const facts = el("dl", { class: "facts" });
   const fact = (name, value) => facts.append(el("dt", { text: name }), value);
-  fact("Версия Provisioner", el("dd", { class: "mono", text: router.version && router.version !== "?" ? router.version : "—" }));
-  if (router.singbox === true) fact("sing-box", el("dd", { class: "ok", text: "работает" }));
-  else if (router.singbox === false) fact("sing-box", el("dd", { class: "no", text: "не работает" }));
+  fact("На связи", el("dd", { class: "num", text: r.waiting ? "ещё не был"
+    : r.last_seen ? ago(r.last_seen) + ", " + stamp(r.last_seen) : "—" }));
+  fact("Версия Provisioner", el("dd", { class: "mono" + (r._flags.has("old") ? " no" : ""),
+    text: (r.version && r.version !== "?" ? r.version : "—")
+          + (r._flags.has("old") ? " (новее: " + newest.join(".") + ")" : "") }));
+  if (r.singbox === true) fact("sing-box", el("dd", { class: "ok", text: "работает" }));
+  else if (r.singbox === false) fact("sing-box", el("dd", { class: "no", text: "не работает" }));
   else fact("sing-box", el("dd", { text: "—" }));
-  const nodes = router.nodes_total === null || router.nodes_total === undefined
-    ? "—" : (router.nodes_alive ?? "?") + " из " + router.nodes_total;
-  const nodesBad = router.nodes_total > 0 && router.nodes_alive === 0;
-  fact("Узлы", el("dd", { class: nodesBad ? "no" : "", text: nodes }));
+  fact("Узлы", el("dd", { class: r._flags.has("nodes") ? "no" : "",
+    text: r.nodes_total === null || r.nodes_total === undefined ? "—"
+          : (r.nodes_alive ?? "?") + " из " + r.nodes_total + " отвечают" }));
 
   let task = null;
-  if (router.task) {
-    task = el("div", { class: "task",
-                       text: "Ждёт роутера: " + (ACTION_NAMES[router.task] || router.task) });
-  } else if (router.taken) {
-    task = el("div", { class: "task muted",
-                       text: "Забрано в " + hhmm(router.taken.ts) + " ("
-                             + (ACTION_NAMES[router.taken.action] || router.taken.action) + ")" });
+  if (r.task) {
+    task = el("div", { class: "task", text: "Ждёт роутера: " + (ACTION_NAMES[r.task] || r.task) });
+  } else if (r.taken) {
+    task = el("div", { class: "task muted", text: "Забрано в " + hhmm(r.taken.ts) + " ("
+      + (ACTION_NAMES[r.taken.action] || r.taken.action) + "), ответ появится ниже." });
   }
 
-  const replies = Array.isArray(router.replies) ? router.replies : [];
-  let replyNode = null;
-  let older = null;
+  let acts = null;
+  if (!r.waiting) {
+    const suggested = KIND[k].act;
+    const order = suggested ? [suggested, ...ACTIONS.map((a) => a[0]).filter((a) => a !== suggested)]
+                            : ACTIONS.map((a) => a[0]);
+    acts = el("div", { class: "acts" },
+      el("h3", { text: "Задание роутеру" }),
+      el("div", { class: "buttons" }, ...order.map((action) => {
+        const button = el("button", { type: "button", class: action === suggested ? "primary" : "",
+                                      text: ACTION_LABEL[action] });
+        button.addEventListener("click", () => queue(r, action, button));
+        return button;
+      })),
+      el("p", { class: "hint", text: r.stale
+        ? "Роутер не на связи: задание дождётся его возвращения."
+        : "Роутер заберёт задание в течение минуты, ответ появится здесь." }));
+  }
+
+  const replies = Array.isArray(r.replies) ? r.replies : [];
+  let replyBox = null;
   if (replies.length) {
-    replyNode = replyBlock(replies[0]);
+    let older = null;
     if (replies.length > 1) {
       older = el("details", {}, el("summary", { text: "Ещё ответы: " + (replies.length - 1) }),
                  ...replies.slice(1).map(replyBlock));
-      // The list is redrawn every 30 seconds; keep an opened history open.
-      older.open = openReplies.has(router.label);
+      // Redrawn every 30 seconds; keep an opened history open.
+      older.open = openReplies.has(r.label);
       older.addEventListener("toggle", () => {
-        if (older.open) openReplies.add(router.label); else openReplies.delete(router.label);
+        if (older.open) openReplies.add(r.label); else openReplies.delete(r.label);
       });
     }
+    replyBox = el("div", { class: "replies" }, el("h3", { text: "Ответы роутера" }),
+                  replyBlock(replies[0]), older);
   }
 
   // The link only exists once the hub has an archive: a click on a missing
   // one would be a 404, and 404s count towards a ban.
   let archive = null;
-  if (router.archive_ts) {
+  if (r.archive_ts) {
     archive = el("div", { class: "archive" },
-      "Архив от " + stamp(router.archive_ts) + " — ",
-      el("a", { href: "ui/api/logs/" + encodeURIComponent(router.label),
-                download: router.label + ".tar.gz", text: "скачать" }));
+      "Архив журналов от " + stamp(r.archive_ts) + " — ",
+      el("a", { href: "ui/api/logs/" + encodeURIComponent(r.label),
+                download: r.label + ".tar.gz", text: "скачать" }));
   }
 
-  const actions = el("div", { class: "actions" },
-    ...ACTIONS.map(([action, label]) => {
-      const button = el("button", { type: "button", text: label });
-      button.addEventListener("click", () => queue(router, action, label, button));
-      return button;
-    }));
+  const keepScroll = box.scrollTop;
+  box.replaceChildren(
+    el("div", { class: "top" },
+      el("div", { class: "who" },
+        el("h2", { id: "detail-title", tabindex: "-1" }, r._title,
+           r.most === true ? el("span", { class: "badge", text: "MOST" }) : null),
+        el("div", { class: "sub" }, el("span", { class: "mono", text: r.label }),
+           r.owner ? " · " + r.owner : null)),
+      el("button", { type: "button", class: "close", "aria-label": "Закрыть", text: "×",
+                     onclick: () => closeDetail(true) })),
+    el("div", { class: "verdict k-" + k },
+      el("strong", { text: KIND[k].state + (other.length ? " · " + other.join(" · ").toLowerCase() : "") }),
+      verdictText),
+    ...[facts, task, acts, replyBox, archive].filter(Boolean),
+    el("button", { type: "button", class: "link edit", text: "Изменить имя и владельца",
+                   onclick: () => openMeta(r) }));
+  box.scrollTop = keepScroll;
+}
 
-  const sign = el("button", { type: "button", class: "link", text: "Подписать",
-                              onclick: () => openMeta(router) });
-
-  return el("article", { class: "card" + (router.stale ? " stale" : "") },
-    head, seen, facts, task, replyNode, older, archive, actions,
-    el("div", { class: "foot" }, sign));
+let returnFocus = "";
+function openDetail(label) {
+  const same = current === label && !$("detail").hidden;
+  current = label;
+  returnFocus = label;
+  $("detail").hidden = false;
+  $("detail").setAttribute("aria-labelledby", "detail-title");
+  $("main").classList.add("with-detail");
+  $("backdrop").hidden = !matchMedia("(max-width: 1099px)").matches;
+  render();
+  if (!same) {
+    $("detail").scrollTop = 0;
+    const title = $("detail-title");
+    if (title) title.focus({ preventScroll: true });
+  }
+}
+function closeDetail(restore) {
+  current = "";
+  $("detail").hidden = true;
+  $("backdrop").hidden = true;
+  $("main").classList.remove("with-detail");
+  if (restore) {
+    render();
+    const back = $("list").querySelector('.row[data-label="' + CSS.escape(returnFocus) + '"] .open');
+    if (back) back.focus();
+  }
 }
 
 function render() {
-  renderFilter();
-  const shown = routers.filter(visible);
-  const list = $("list");
-  if (!routers.length) {
-    list.replaceChildren(el("p", { class: "empty",
-      text: "Роутеров пока нет. Нажмите «Подключить новый»." }));
-  } else if (!shown.length) {
-    list.replaceChildren(el("p", { class: "empty", text: "В этой группе роутеров нет." }));
-  } else {
-    list.replaceChildren(...shown.map(card));
+  if (!$("app").hidden || routers.length) {
+    renderControls();
+    renderList();
+    renderDetail();
+    renderBulk();
   }
-  const stale = routers.filter((r) => r.stale).length;
-  $("status").textContent = "Обновлено в " + hhmm(serverNow)
-    + (stale ? " · не на связи: " + stale : "");
 }
 
 // --- login / logout --------------------------------------------------------
@@ -706,15 +1320,35 @@ $("logout-form").addEventListener("submit", async (event) => {
   loggedOut();
 });
 
-// --- filter ----------------------------------------------------------------
+// --- controls --------------------------------------------------------------
 
-for (const button of document.querySelectorAll("[data-filter]")) {
-  button.addEventListener("click", () => {
-    filter = button.dataset.filter;
-    try { localStorage.setItem("hub-filter", filter); } catch (e) { /* fine */ }
-    render();
-  });
+for (const button of document.querySelectorAll("[data-group]")) {
+  button.addEventListener("click", () => setView({ group: button.dataset.group }));
 }
+$("sort").addEventListener("change", (event) => setView({ sort: event.target.value }));
+$("q").addEventListener("input", (event) => setView({ q: event.target.value.trim() }));
+$("q").addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && event.target.value) {
+    event.preventDefault();
+    event.target.value = "";
+    setView({ q: "" });
+  }
+});
+$("backdrop").addEventListener("click", () => closeDetail(true));
+window.addEventListener("hashchange", () => { readHash(); render(); });
+
+// "/" jumps to the search from anywhere; Esc closes the details.
+document.addEventListener("keydown", (event) => {
+  if (document.querySelector("dialog[open]")) return;
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if (event.key === "/" && !typing && !event.metaKey && !event.ctrlKey) {
+    event.preventDefault();
+    $("q").focus();
+    $("q").select();
+  } else if (event.key === "Escape" && !$("detail").hidden && document.activeElement !== $("q")) {
+    closeDetail(true);
+  }
+});
 
 // --- dialogs ---------------------------------------------------------------
 
@@ -740,7 +1374,7 @@ for (const button of document.querySelectorAll("[data-copy]")) {
 $("enroll-open").addEventListener("click", () => {
   const form = $("enroll-form");
   form.reset();
-  form.most.checked = filter === "most";
+  form.most.checked = view.group === "most";
   form.hidden = false;
   $("enroll-error").textContent = "";
   $("enroll-result").hidden = true;
@@ -809,6 +1443,12 @@ $("meta-form").addEventListener("submit", async (event) => {
 
 // --- start -----------------------------------------------------------------
 
+// The details panel sticks just under the header, whatever its height.
+new ResizeObserver(([entry]) => {
+  document.documentElement.style.setProperty("--header-h", entry.target.offsetHeight + "px");
+}).observe(document.querySelector("header"));
+
+readHash();
 // A 401 here simply shows the login form; a session cookie, if any, is sent
 // by the browser on its own.
 load().then(() => { if ($("login").hidden) startPolling(); });

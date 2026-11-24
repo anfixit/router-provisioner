@@ -117,7 +117,7 @@ ordered' "$layout" \
         'env.example documents the hash'
     assert_contains "$envex" 'router-hub.py --hash-password' \
         'env.example says how to get the hash'
-    assert_equal '2.31.0' "$(cat "$PROJECT_DIR/VERSION")" 'version is bumped'
+    assert_equal '2.32.0' "$(cat "$PROJECT_DIR/VERSION")" 'version is bumped'
     assert_contains "$(cat "$PROJECT_DIR/CHANGELOG.md")" '## [2.31.0]' \
         'changelog has the release'
 }

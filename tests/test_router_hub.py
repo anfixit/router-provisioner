@@ -310,6 +310,31 @@ class HubTest(unittest.TestCase):
         self.assertEqual(self.ui_json(
             "/ui/api/task", {"label": "r14", "action": "logs"})[0], 401)
 
+    def test_ui_bulk_task_writes_every_label_or_none(self):
+        cookie = self.session_cookie()
+        code, _, body = self.ui_json(
+            "/ui/api/tasks", {"labels": ["r20", "r21", "r20"], "action": "status"}, cookie)
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body), {"ok": True, "count": 2})
+        self.assertEqual(self.get("/task/r20"), (200, "status\n"))
+        self.assertEqual(self.get("/task/r21"), (200, "status\n"))
+        # One bad label refuses the whole batch: r22 must stay without a task.
+        for labels in (["r22", "bad label!"], ["r22", "r23\n"], ["r22", 5], [],
+                       "r22", ["r%d" % n for n in range(hub.UI_BULK_MAX + 1)]):
+            with self.subTest(labels=str(labels)[:40]):
+                self.assertEqual(self.ui_json(
+                    "/ui/api/tasks", {"labels": labels, "action": "logs"}, cookie)[0], 400)
+        self.assertEqual(self.get("/task/r22"), (200, "none\n"))
+        for action in ("move", "dns-google", None):
+            with self.subTest(action=action):
+                self.assertEqual(self.ui_json(
+                    "/ui/api/tasks", {"labels": ["r22"], "action": action}, cookie)[0], 400)
+        self.assertEqual(self.ui_json(
+            "/ui/api/tasks", {"labels": ["r22"], "action": "logs"}, cookie,
+            ui_header=False)[0], 403)
+        self.assertEqual(self.ui_json(
+            "/ui/api/tasks", {"labels": ["r22"], "action": "logs"})[0], 401)
+
     def test_ui_json_body_is_limited_and_checked(self):
         cookie = self.session_cookie()
         self.assertEqual(self.ui_json("/ui/api/task", b"not json", cookie)[0], 400)

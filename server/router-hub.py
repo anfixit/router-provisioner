@@ -84,6 +84,9 @@ UI_BODY_MAX = 16 * 1024
 # setconfig) or change DNS stay behind the router key, so a stolen browser
 # session cannot steer a router somewhere else.
 UI_ACTIONS = ("logs", "update", "fix", "status", "resub")
+# How many routers one bulk task may name; far above the fleet, well under
+# UI_BODY_MAX (a label is at most 32 characters).
+UI_BULK_MAX = 200
 # Read from disk on every request, so a page fix needs no restart.
 UI_FILE = os.environ.get("HUB_UI", os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "hub-ui.html"))
@@ -556,13 +559,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return data
 
     def _ui_post(self, parts):
-        if parts not in (["ui", "api", "task"], ["ui", "api", "meta"],
-                         ["ui", "api", "enroll"]):
+        if parts not in (["ui", "api", "task"], ["ui", "api", "tasks"],
+                         ["ui", "api", "meta"], ["ui", "api", "enroll"]):
             self._send(404, "not found\n")
             return
         data = self._read_json()
         if data is None:
             return
+
+        # One task for several routers at once. All labels are checked before
+        # any is written, so a bad one cannot leave the batch half done.
+        if parts == ["ui", "api", "tasks"]:
+            labels, action = data.get("labels"), data.get("action")
+            if action not in UI_ACTIONS:
+                self._fail(400, "Такое задание отсюда не ставится.")
+                return
+            if (not isinstance(labels, list) or not 0 < len(labels) <= UI_BULK_MAX
+                    or not all(isinstance(item, str) and LABEL_RE.fullmatch(item)
+                               for item in labels)):
+                self._fail(400, "Нужен список до %d меток: латиница, цифры, - и _."
+                           % UI_BULK_MAX)
+                return
+            unique = list(dict.fromkeys(labels))
+            for item in unique:
+                write_task(item, action)
+            self._json(200, {"ok": True, "count": len(unique)})
+            return
+
         label = data.get("label")
         # fullmatch: `$` in LABEL_RE also accepts a trailing newline, which must
         # never reach a file name or the enrolment script.
