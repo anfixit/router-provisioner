@@ -587,7 +587,7 @@ function card(router) {
 
   const facts = el("dl", { class: "facts" });
   const fact = (name, value) => facts.append(el("dt", { text: name }), value);
-  fact("Версия", el("dd", { class: "mono", text: router.version && router.version !== "?" ? router.version : "—" }));
+  fact("Версия Provisioner", el("dd", { class: "mono", text: router.version && router.version !== "?" ? router.version : "—" }));
   if (router.singbox === true) fact("sing-box", el("dd", { class: "ok", text: "работает" }));
   else if (router.singbox === false) fact("sing-box", el("dd", { class: "no", text: "не работает" }));
   else fact("sing-box", el("dd", { text: "—" }));
