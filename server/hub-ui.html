@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<!-- Every 404 counts towards a fail2ban ban, so the browser must not go
+     looking for /favicon.ico on its own. -->
+<link rel="icon" href="data:,">
+<title>Хаб роутеров</title>
+<style>
+:root {
+  --bg: #f4f5f7;
+  --card: #ffffff;
+  --text: #1d2125;
+  --muted: #626f7d;
+  --line: #dde1e6;
+  --accent: #2f5fb3;
+  --accent-text: #ffffff;
+  --soft: #eef1f5;
+  --bad: #c4321f;
+  --bad-soft: #fbe9e6;
+  --good: #22804a;
+  --most: #7a4fb0;
+  --most-soft: #f1eaf9;
+  --shadow: 0 1px 2px rgba(20, 30, 40, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181c;
+    --card: #1e2227;
+    --text: #e4e7eb;
+    --muted: #96a0ab;
+    --line: #333a42;
+    --accent: #6b9be8;
+    --accent-text: #0e1420;
+    --soft: #272c33;
+    --bad: #f07a68;
+    --bad-soft: #3a2522;
+    --good: #5cc78a;
+    --most: #c3a2ec;
+    --most-soft: #2e2638;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+button, input { font: inherit; color: inherit; }
+button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button:disabled { opacity: .55; cursor: default; }
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+button.link {
+  border: 0;
+  background: none;
+  padding: 6px 4px;
+  color: var(--accent);
+}
+input[type=text], input[type=password] {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+a { color: var(--accent); }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+.muted { color: var(--muted); }
+
+/* Login */
+#login {
+  max-width: 340px;
+  margin: 18vh auto 0;
+  padding: 0 16px;
+}
+#login h1 { font-size: 20px; margin: 0 0 16px; }
+#login form { display: grid; gap: 10px; }
+.error { color: var(--bad); min-height: 1.45em; margin: 0; }
+
+/* Top bar */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.bar {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 10px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.bar h1 { font-size: 18px; margin: 0; margin-right: auto; }
+.filter { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.filter button { border: 0; border-radius: 0; background: var(--card); }
+.filter button + button { border-left: 1px solid var(--line); }
+.filter button[aria-pressed=true] { background: var(--soft); font-weight: 600; }
+.status {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 10px 16px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Cards */
+#list {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 12px 16px 32px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.card.stale { border-color: var(--bad); }
+.head { display: flex; align-items: flex-start; gap: 8px; }
+.head .who { flex: 1; min-width: 0; }
+.head h2 { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
+.head .sub { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.badge {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--most);
+  background: var(--most-soft);
+}
+.seen { font-size: 13px; }
+.seen.bad { color: var(--bad); font-weight: 600; }
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 14px;
+}
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.ok { color: var(--good); }
+.no { color: var(--bad); }
+.task { font-size: 13px; padding: 6px 10px; border-radius: 8px; background: var(--soft); }
+.reply { display: grid; gap: 4px; }
+.reply .when { font-size: 12px; color: var(--muted); }
+.reply pre, details pre {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+details summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+details .reply { margin-top: 8px; }
+.archive { font-size: 13px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.actions button { font-size: 14px; }
+.foot { display: flex; justify-content: flex-end; }
+.empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 40px 0; }
+
+/* Dialogs */
+dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px;
+  background: var(--card);
+  color: var(--text);
+}
+dialog::backdrop { background: rgba(0, 0, 0, .4); }
+dialog h2 { font-size: 17px; margin: 0 0 14px; }
+dialog form { display: grid; gap: 12px; }
+label.field { display: grid; gap: 4px; font-size: 14px; }
+label.check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+label.check input { width: 18px; height: 18px; margin: 0; }
+.buttons { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.result { display: grid; gap: 10px; }
+.copyrow { display: grid; gap: 4px; }
+.copyrow .line { display: flex; gap: 6px; align-items: stretch; }
+.copyrow output {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--soft);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.hint { font-size: 13px; color: var(--muted); margin: 0; }
+
+/* Toast */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .2);
+}
+#toast.bad { background: var(--bad); color: #fff; }
+</style>
+</head>
+<body>
+
+<main id="login" hidden>
+  <h1>Хаб роутеров</h1>
+  <form id="login-form" method="post" action="ui/login">
+    <label class="field">Пароль
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <p class="error" id="login-error" role="alert"></p>
+    <button class="primary" type="submit">Войти</button>
+  </form>
+</main>
+
+<div id="app" hidden>
+  <header>
+    <div class="bar">
+      <h1>Хаб роутеров</h1>
+      <div class="filter" role="group" aria-label="Какие роутеры показать">
+        <button type="button" data-filter="all" aria-pressed="true">Все</button>
+        <button type="button" data-filter="most" aria-pressed="false">MOST</button>
+        <button type="button" data-filter="own" aria-pressed="false">Личные</button>
+      </div>
+      <button type="button" class="primary" id="enroll-open">Подключить новый</button>
+      <form id="logout-form" method="post" action="ui/logout">
+        <button type="submit" class="link">Выйти</button>
+      </form>
+    </div>
+  </header>
+  <div class="status" id="status" aria-live="polite"></div>
+  <div id="list"></div>
+</div>
+
+<dialog id="enroll">
+  <h2>Подключить новый роутер</h2>
+  <form id="enroll-form">
+    <label class="field">Метка (латиница)
+      <input type="text" name="label" required maxlength="32" pattern="[A-Za-z0-9_\-]{1,32}"
+             autocapitalize="off" autocomplete="off" spellcheck="false" class="mono"
+             title="До 32 символов: латиница, цифры, - и _">
+    </label>
+    <label class="field">Имя
+      <input type="text" name="name" maxlength="64" autocomplete="off">
+    </label>
+    <label class="field">Владелец
+      <input type="text" name="owner" maxlength="64" autocomplete="off">
+    </label>
+    <label class="check"><input type="checkbox" name="most"> MOST</label>
+    <label class="check"><input type="checkbox" name="reinstall"> Это переустановка того же роутера</label>
+    <p class="error" id="enroll-error" role="alert"></p>
+    <div class="buttons">
+      <button type="button" data-close>Отмена</button>
+      <button type="submit" class="primary">Получить код</button>
+    </div>
+  </form>
+  <div class="result" id="enroll-result" hidden>
+    <div class="copyrow">
+      <span class="muted">Код</span>
+      <div class="line">
+        <output class="mono" id="enroll-code"></output>
+        <button type="button" data-copy="enroll-code">Скопировать</button>
+      </div>
+    </div>
+    <div class="copyrow">
+      <span class="muted">Команда</span>
+      <div class="line">
+        <output class="mono" id="enroll-command"></output>
+        <button type="button" data-copy="enroll-command">Скопировать</button>
+      </div>
+    </div>
+    <p class="hint">Вставьте команду на роутере по SSH после провижинера или введите код, когда провижинер спросит.</p>
+    <p class="hint">Код действует один час и срабатывает один раз.</p>
+    <div class="buttons">
+      <button type="button" class="primary" data-close>Готово</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="meta">
+  <h2>Подписать <span class="mono" id="meta-label"></span></h2>
+  <form id="meta-form">
+    <label class="field">Имя
+      <input type="text" name="name" maxlength="64" autocomplete="off">
+    </label>
+    <label class="field">Владелец
+      <input type="text" name="owner" maxlength="64" autocomplete="off">
+    </label>
+    <label class="check"><input type="checkbox" name="most"> MOST</label>
+    <p class="error" id="meta-error" role="alert"></p>
+    <div class="buttons">
+      <button type="button" data-close>Отмена</button>
+      <button type="submit" class="primary">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" hidden></div>
+
+<script>
+"use strict";
+// Everything that came from the hub - names, owners, router replies - goes on
+// the page through textContent only. A reply is whatever a router printed, so
+// it is treated as text even when it looks like markup.
+
+const POLL_MS = 30000;
+const ACTIONS = [
+  ["logs", "Логи"],
+  ["update", "Обновить"],
+  ["fix", "Починить"],
+  ["status", "Состояние"],
+  ["resub", "Обновить подписку"],
+];
+const ACTION_NAMES = {
+  logs: "логи", update: "обновление", fix: "починка", status: "состояние",
+  resub: "обновление подписки", config: "настройки", route: "маршруты",
+  move: "переезд", "dns-google": "DNS Google",
+};
+// These two restart services on someone's router; a stray tap should not.
+const CONFIRM = {
+  update: "Обновить скрипты на роутере?",
+  fix: "Запустить починку на роутере?",
+};
+
+const $ = (id) => document.getElementById(id);
+let routers = [];
+let serverNow = 0;
+let filter = "all";
+let timer = null;
+let polling = false;
+const openReplies = new Set();
+
+try {
+  const saved = localStorage.getItem("hub-filter");
+  if (saved === "most" || saved === "own") filter = saved;
+} catch (e) { /* storage blocked: default filter */ }
+
+function el(tag, props, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(typeof child === "string" ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+const pad = (n) => String(n).padStart(2, "0");
+function hhmm(ts) {
+  const d = new Date(ts * 1000);
+  return pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function stamp(ts) {
+  const d = new Date(ts * 1000);
+  return pad(d.getDate()) + "." + pad(d.getMonth() + 1) + " " + hhmm(ts);
+}
+function ago(ts) {
+  const min = Math.max(0, Math.floor((serverNow - ts) / 60));
+  if (min < 1) return "только что";
+  if (min < 60) return min + " мин назад";
+  const hours = Math.floor(min / 60);
+  if (hours < 48) return hours + " ч назад";
+  return Math.floor(hours / 24) + " дн назад";
+}
+
+let toastTimer = null;
+function toast(text, bad) {
+  const box = $("toast");
+  box.textContent = text;
+  box.classList.toggle("bad", !!bad);
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.hidden = true; }, bad ? 6000 : 3000);
+}
+
+// --- polling -------------------------------------------------------------
+
+function startPolling() {
+  polling = true;
+  schedule();
+}
+
+// Called on the first 401: an expired session in a forgotten tab must not
+// keep knocking every 30 seconds.
+function stopPolling() {
+  polling = false;
+  clearTimeout(timer);
+  timer = null;
+}
+
+function schedule() {
+  clearTimeout(timer);
+  timer = null;
+  if (polling && document.visibilityState === "visible") {
+    timer = setTimeout(() => load().finally(schedule), POLL_MS);
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!polling) return;
+  if (document.visibilityState === "visible") load().finally(schedule);
+  else { clearTimeout(timer); timer = null; }
+});
+
+function loggedOut() {
+  stopPolling();
+  for (const d of document.querySelectorAll("dialog")) if (d.open) d.close();
+  $("app").hidden = true;
+  $("login").hidden = false;
+  $("login-form").password.focus();
+}
+
+// A hub that is down is not a reason to ask for the password again: show the
+// (possibly empty) list with the reason and keep trying.
+function trouble(text) {
+  $("status").textContent = text;
+  if ($("login").hidden) $("app").hidden = false;
+}
+
+async function load() {
+  let response;
+  try {
+    response = await fetch("ui/api/routers", { cache: "no-store" });
+  } catch (e) {
+    trouble("Хаб не отвечает, попробуем ещё раз через 30 секунд.");
+    return;
+  }
+  if (response.status === 401) { loggedOut(); return; }
+  // 403/404 mean the page is off on the hub; polling on would feed fail2ban.
+  if (response.status === 403 || response.status === 404) {
+    stopPolling();
+    trouble("Страница выключена на хабе. Включите её и обновите вкладку.");
+    return;
+  }
+  if (!response.ok) {
+    trouble("Хаб ответил ошибкой " + response.status + ".");
+    return;
+  }
+  let data;
+  try {
+    data = await response.json();
+  } catch (e) {
+    trouble("Хаб ответил не так, как ждали. Попробуем ещё раз через 30 секунд.");
+    return;
+  }
+  routers = Array.isArray(data.routers) ? data.routers : [];
+  serverNow = data.now;
+  $("login").hidden = true;
+  $("app").hidden = false;
+  render();
+}
+
+// --- API -------------------------------------------------------------------
+
+async function post(path, body) {
+  let response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Hub-UI": "1" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return { ok: false, error: "Хаб не отвечает." };
+  }
+  if (response.status === 401) { loggedOut(); return { ok: false, error: "" }; }
+  let data = {};
+  try { data = await response.json(); } catch (e) { /* not JSON */ }
+  if (!response.ok) {
+    return { ok: false, status: response.status,
+             error: (data && data.error) || "Хаб ответил ошибкой " + response.status + "." };
+  }
+  return { ok: true, data };
+}
+
+async function queue(router, action, label, button) {
+  if (CONFIRM[action] && !confirm(CONFIRM[action] + "\n" + (router.name || router.label))) return;
+  button.disabled = true;
+  const result = await post("ui/api/task", { label: router.label, action });
+  button.disabled = false;
+  if (result.ok) {
+    toast("Поставлено: " + label + ". Роутер заберёт задание в течение минуты.");
+    load();
+  } else if (result.error) {
+    toast(result.error, true);
+  }
+}
+
+// --- rendering -------------------------------------------------------------
+
+function visible(router) {
+  if (filter === "most") return router.most === true;
+  if (filter === "own") return router.most !== true;
+  return true;
+}
+
+function renderFilter() {
+  const counts = {
+    all: routers.length,
+    most: routers.filter((r) => r.most === true).length,
+  };
+  counts.own = counts.all - counts.most;
+  const names = { all: "Все", most: "MOST", own: "Личные" };
+  for (const button of document.querySelectorAll("[data-filter]")) {
+    const key = button.dataset.filter;
+    button.setAttribute("aria-pressed", String(key === filter));
+    button.textContent = names[key] + " " + counts[key];
+  }
+}
+
+function replyBlock(reply) {
+  return el("div", { class: "reply" },
+    el("span", { class: "when", text: "Ответ " + stamp(reply.ts) }),
+    el("pre", { text: String(reply.text) }));
+}
+
+function card(router) {
+  const title = router.name || router.label;
+  const head = el("div", { class: "head" },
+    el("div", { class: "who" },
+      el("h2", { text: title }),
+      el("div", { class: "sub" },
+        router.name ? el("span", { class: "mono", text: router.label }) : null,
+        router.name && router.owner ? " · " : null,
+        router.owner ? router.owner : null)),
+    router.most === true ? el("span", { class: "badge", text: "MOST" }) : null);
+
+  let seen;
+  if (router.waiting) seen = el("div", { class: "seen muted", text: "ждём подключения" });
+  else seen = el("div", { class: "seen" + (router.stale ? " bad" : " muted"),
+                          title: stamp(router.last_seen),
+                          text: (router.stale ? "Не на связи: " : "На связи ") + ago(router.last_seen) });
+
+  const facts = el("dl", { class: "facts" });
+  const fact = (name, value) => facts.append(el("dt", { text: name }), value);
+  fact("Версия", el("dd", { class: "mono", text: router.version && router.version !== "?" ? router.version : "—" }));
+  if (router.singbox === true) fact("sing-box", el("dd", { class: "ok", text: "работает" }));
+  else if (router.singbox === false) fact("sing-box", el("dd", { class: "no", text: "не работает" }));
+  else fact("sing-box", el("dd", { text: "—" }));
+  const nodes = router.nodes_total === null || router.nodes_total === undefined
+    ? "—" : (router.nodes_alive ?? "?") + " из " + router.nodes_total;
+  const nodesBad = router.nodes_total > 0 && router.nodes_alive === 0;
+  fact("Узлы", el("dd", { class: nodesBad ? "no" : "", text: nodes }));
+
+  let task = null;
+  if (router.task) {
+    task = el("div", { class: "task",
+                       text: "Ждёт роутера: " + (ACTION_NAMES[router.task] || router.task) });
+  } else if (router.taken) {
+    task = el("div", { class: "task muted",
+                       text: "Забрано в " + hhmm(router.taken.ts) + " ("
+                             + (ACTION_NAMES[router.taken.action] || router.taken.action) + ")" });
+  }
+
+  const replies = Array.isArray(router.replies) ? router.replies : [];
+  let replyNode = null;
+  let older = null;
+  if (replies.length) {
+    replyNode = replyBlock(replies[0]);
+    if (replies.length > 1) {
+      older = el("details", {}, el("summary", { text: "Ещё ответы: " + (replies.length - 1) }),
+                 ...replies.slice(1).map(replyBlock));
+      // The list is redrawn every 30 seconds; keep an opened history open.
+      older.open = openReplies.has(router.label);
+      older.addEventListener("toggle", () => {
+        if (older.open) openReplies.add(router.label); else openReplies.delete(router.label);
+      });
+    }
+  }
+
+  // The link only exists once the hub has an archive: a click on a missing
+  // one would be a 404, and 404s count towards a ban.
+  let archive = null;
+  if (router.archive_ts) {
+    archive = el("div", { class: "archive" },
+      "Архив от " + stamp(router.archive_ts) + " — ",
+      el("a", { href: "ui/api/logs/" + encodeURIComponent(router.label),
+                download: router.label + ".tar.gz", text: "скачать" }));
+  }
+
+  const actions = el("div", { class: "actions" },
+    ...ACTIONS.map(([action, label]) => {
+      const button = el("button", { type: "button", text: label });
+      button.addEventListener("click", () => queue(router, action, label, button));
+      return button;
+    }));
+
+  const sign = el("button", { type: "button", class: "link", text: "Подписать",
+                              onclick: () => openMeta(router) });
+
+  return el("article", { class: "card" + (router.stale ? " stale" : "") },
+    head, seen, facts, task, replyNode, older, archive, actions,
+    el("div", { class: "foot" }, sign));
+}
+
+function render() {
+  renderFilter();
+  const shown = routers.filter(visible);
+  const list = $("list");
+  if (!routers.length) {
+    list.replaceChildren(el("p", { class: "empty",
+      text: "Роутеров пока нет. Нажмите «Подключить новый»." }));
+  } else if (!shown.length) {
+    list.replaceChildren(el("p", { class: "empty", text: "В этой группе роутеров нет." }));
+  } else {
+    list.replaceChildren(...shown.map(card));
+  }
+  const stale = routers.filter((r) => r.stale).length;
+  $("status").textContent = "Обновлено в " + hhmm(serverNow)
+    + (stale ? " · не на связи: " + stale : "");
+}
+
+// --- login / logout --------------------------------------------------------
+
+$("login-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  const error = $("login-error");
+  error.textContent = "";
+  button.disabled = true;
+  button.textContent = "Проверяем…";
+  let response = null;
+  try {
+    // A right password answers 303 with the cookie; following it is not
+    // needed, the list is loaded right here.
+    response = await fetch("ui/login", {
+      method: "POST",
+      body: new URLSearchParams({ password: form.password.value }),
+      redirect: "manual",
+    });
+  } catch (e) { /* network error, handled below */ }
+  button.disabled = false;
+  button.textContent = "Войти";
+  if (response && (response.type === "opaqueredirect" || response.ok)) {
+    form.reset();
+    await load();
+    startPolling();
+  } else {
+    error.textContent = response ? "Неверный пароль" : "Хаб не отвечает.";
+    form.password.select();
+  }
+});
+
+$("logout-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await fetch("ui/logout", { method: "POST", redirect: "manual" });
+  } catch (e) { /* the cookie may survive; the next 401 settles it */ }
+  routers = [];
+  $("list").replaceChildren();
+  loggedOut();
+});
+
+// --- filter ----------------------------------------------------------------
+
+for (const button of document.querySelectorAll("[data-filter]")) {
+  button.addEventListener("click", () => {
+    filter = button.dataset.filter;
+    try { localStorage.setItem("hub-filter", filter); } catch (e) { /* fine */ }
+    render();
+  });
+}
+
+// --- dialogs ---------------------------------------------------------------
+
+for (const button of document.querySelectorAll("[data-close]")) {
+  button.addEventListener("click", () => button.closest("dialog").close());
+}
+
+for (const button of document.querySelectorAll("[data-copy]")) {
+  button.addEventListener("click", async () => {
+    const source = $(button.dataset.copy);
+    try {
+      await navigator.clipboard.writeText(source.textContent);
+      button.textContent = "Скопировано";
+    } catch (e) {
+      // No clipboard over plain http or in old browsers: select it instead.
+      window.getSelection().selectAllChildren(source);
+      button.textContent = "Выделено";
+    }
+    setTimeout(() => { button.textContent = "Скопировать"; }, 2000);
+  });
+}
+
+$("enroll-open").addEventListener("click", () => {
+  const form = $("enroll-form");
+  form.reset();
+  form.most.checked = filter === "most";
+  form.hidden = false;
+  $("enroll-error").textContent = "";
+  $("enroll-result").hidden = true;
+  $("enroll").showModal();
+  form.label.focus();
+});
+
+$("enroll-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("[type=submit]");
+  $("enroll-error").textContent = "";
+  button.disabled = true;
+  const result = await post("ui/api/enroll", {
+    label: form.label.value.trim(),
+    name: form.name.value.trim(),
+    owner: form.owner.value.trim(),
+    most: form.most.checked,
+    reinstall: form.reinstall.checked,
+  });
+  button.disabled = false;
+  if (!result.ok) {
+    $("enroll-error").textContent = result.error;
+    return;
+  }
+  $("enroll-code").textContent = result.data.code;
+  $("enroll-command").textContent = result.data.command;
+  form.hidden = true;
+  $("enroll-result").hidden = false;
+  load();
+});
+
+let metaLabel = "";
+function openMeta(router) {
+  const form = $("meta-form");
+  metaLabel = router.label;
+  $("meta-label").textContent = router.label;
+  form.name.value = router.name || "";
+  form.owner.value = router.owner || "";
+  form.most.checked = router.most === true;
+  $("meta-error").textContent = "";
+  $("meta").showModal();
+  form.name.focus();
+}
+
+$("meta-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("[type=submit]");
+  button.disabled = true;
+  const result = await post("ui/api/meta", {
+    label: metaLabel,
+    name: form.name.value.trim(),
+    owner: form.owner.value.trim(),
+    most: form.most.checked,
+  });
+  button.disabled = false;
+  if (!result.ok) {
+    $("meta-error").textContent = result.error;
+    return;
+  }
+  $("meta").close();
+  toast("Подпись сохранена.");
+  load();
+});
+
+// --- start -----------------------------------------------------------------
+
+// A 401 here simply shows the login form; a session cookie, if any, is sent
+// by the browser on its own.
+load().then(() => { if ($("login").hidden) startPolling(); });
+</script>
+</body>
+</html>

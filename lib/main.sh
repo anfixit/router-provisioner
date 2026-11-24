@@ -23,6 +23,8 @@ RUNTIME_DIR=${ROUTER_PROVISIONER_RUNTIME_DIR:-}
 . "$RUNTIME_DIR/pinning.sh"
 # shellcheck source=lib/lifecycle.sh
 . "$RUNTIME_DIR/lifecycle.sh"
+# shellcheck source=lib/hub.sh
+. "$RUNTIME_DIR/hub.sh"
 
 usage() {
     cat <<EOF_USAGE
@@ -55,6 +57,7 @@ print_final_report() {
     fi
 
     printf 'Безопасное обновление: %s\n' "$REFRESH_HELPER"
+    [ -f "$HUB_CONF_PATH" ] && printf 'Хаб: роутер подключён (%s)\n' "$HUB_CONF_PATH"
     warn 'Dropbear не перезапущен. Проверьте новый вход во втором терминале.'
 }
 
@@ -87,6 +90,8 @@ main() {
         configure_pinned_sections
         run_lifecycle_steps
     fi
+
+    configure_hub
 
     print_final_report
 }

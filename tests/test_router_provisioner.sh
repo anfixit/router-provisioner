@@ -75,6 +75,87 @@ CONFIG_BACKUP=''
 . "$PROJECT_DIR/lib/pinning.sh"
 # shellcheck source=../lib/lifecycle.sh
 . "$PROJECT_DIR/lib/lifecycle.sh"
+# shellcheck source=../lib/hub.sh
+. "$PROJECT_DIR/lib/hub.sh"
+
+test_hub_page_is_wired_into_the_stack() {
+    caddy=$(cat "$PROJECT_DIR/server/deploy/Caddyfile")
+    compose=$(cat "$PROJECT_DIR/server/deploy/compose.yaml")
+    envex=$(cat "$PROJECT_DIR/server/deploy/env.example")
+    assert_contains "$caddy" '@metrics path /hub/metrics /hub/metrics/*' \
+        'the subpaths of metrics are closed too'
+    assert_contains "$caddy" 'redir /hub /hub/ 308' \
+        'the address without a trailing slash reaches the page'
+    assert_contains "$caddy" 'handle @metrics {' \
+        'metrics are answered in Caddy, not proxied'
+    # Caddy picks the first matching handle, so the closed paths must precede
+    # the proxy and the catch-all or the closing is dead text. Read each
+    # block's first body line and the line numbers with plain awk.
+    caddyfile="$PROJECT_DIR/server/deploy/Caddyfile"
+    layout=$(awk '
+        /^\thandle @metrics \{$/ { m = NR; getline; mb = $1 " " $2 }
+        /^\thandle \/favicon.ico \{$/ { f = NR; getline; fb = $1 " " $2 }
+        /^\thandle_path \/hub\/\* \{$/ { p = NR }
+        /^\thandle \{$/ { c = NR }
+        END {
+            print mb; print fb
+            print (m && f && p && c && m < p && f < c && p < c) ? "ordered" : "misordered"
+        }' "$caddyfile")
+    assert_equal 'respond 404
+respond 204
+ordered' "$layout" \
+        'metrics 404 and favicon 204 sit before the proxy and catch-all'
+    assert_contains "$caddy" 'handle /favicon.ico' \
+        'favicon is answered so the catch-all 404 does not feed fail2ban'
+    assert_contains "$compose" 'HUB_ADMIN_PASSWORD_HASH' \
+        'the hub receives the admin password hash'
+    assert_contains "$compose" 'hub-ui.html:/app/hub-ui.html:ro' \
+        'the page is mounted read-only next to the hub'
+    assert_contains "$envex" 'HUB_ADMIN_PASSWORD_HASH=' \
+        'env.example documents the hash'
+    assert_contains "$envex" 'router-hub.py --hash-password' \
+        'env.example says how to get the hash'
+    assert_equal '2.31.0' "$(cat "$PROJECT_DIR/VERSION")" 'version is bumped'
+    assert_contains "$(cat "$PROJECT_DIR/CHANGELOG.md")" '## [2.31.0]' \
+        'changelog has the release'
+}
+
+test_hub_enroll_token_is_extracted() {
+    token='jwd5QZS9XqNejWRAoc5Tqg'
+    assert_equal "$token" "$(extract_enroll_token "$token")" \
+        'a bare code is taken as is'
+    assert_equal "$token" "$(extract_enroll_token \
+        "uclient-fetch -4 -q -O- https://anfisson.duckdns.org/hub/enroll/$token | sh")" \
+        'the code is pulled out of a pasted command'
+    assert_false 'a word is not a code' extract_enroll_token 'да'
+    assert_false 'a short string is not a code' extract_enroll_token 'abc'
+    assert_false 'a command is not a code' extract_enroll_token 'rm -rf /'
+
+    dir=$(mktemp -d)
+    printf '#!/bin/ash\nset -e\ncat > /etc/router-provisioner/hub.conf <<EOF\n' \
+        > "$dir/good"
+    printf '<html>\n' > "$dir/html"
+    assert_true 'a genuine enrol script is accepted' \
+        enroll_script_ok "$dir/good"
+    assert_false 'an html page is refused' enroll_script_ok "$dir/html"
+    rm -rf "$dir"
+}
+
+test_hub_step_never_aborts_the_run() {
+    main_sh=$(cat "$PROJECT_DIR/lib/main.sh")
+    hub_sh=$(cat "$PROJECT_DIR/lib/hub.sh")
+    launcher=$(cat "$PROJECT_DIR/router-provisioner.sh")
+    # The call sits right between the closing fi of the NetShift block and the
+    # final report, so it runs with or without NetShift.
+    order=$(grep -B2 -A2 '^    configure_hub$' "$PROJECT_DIR/lib/main.sh" | \
+        tr -d ' \n')
+    assert_equal 'ficonfigure_hubprint_final_report' "$order" \
+        'configure_hub runs after the NetShift block and before the report'
+    assert_contains "$main_sh" '    configure_hub' 'main calls configure_hub'
+    assert_not_contains "$hub_sh" 'fatal' 'the hub step never aborts the run'
+    assert_contains "$launcher" 'lifecycle hub main' \
+        'the launcher downloads the hub module'
+}
 
 test_version_comparison() {
     assert_true 'newer OpenWrt must pass' \
@@ -1316,6 +1397,45 @@ test_russian_services_stay_out_of_the_tunnel() {
     assert_contains "$command" 'if drop_direct_russia_outside; then' \
         'the repair action must reach routers whose list set nobody knows'
 }
+test_replies_reach_the_hub() {
+    dir=$(mktemp -d)
+    sed -n '/^hub_pin() {/,/^HUB_PIN=/p;/^hub_curl() {/,/^}/p;/^reply() {/,/^}/p' \
+        "$PROJECT_DIR/runtime/router-provisioner-command" > "$dir/functions"
+    cat > "$dir/run.sh" <<'EOS'
+dir=$1
+. "$dir/functions"
+curl() {
+    echo called >> "$dir/curl.calls"
+    printf '%s\n' "$*" >> "$dir/curl.args"
+    for arg in "$@"; do
+        case "$arg" in @*) cat "${arg#@}" > "$dir/curl.body" ;; esac
+    done
+    return "${CURL_RC:-0}"
+}
+api() { echo called >> "$dir/api.calls"; return 0; }
+HUB_URL=https://hub.example HUB_KEY=k LABEL=r1 HUB_IP=''
+HUB=$HUB_FLAG TELEGRAM=$TG_FLAG CHAT_ID=1
+reply 'тест'
+EOS
+    HUB_FLAG=1 TG_FLAG=0 sh "$dir/run.sh" "$dir"
+    assert_contains "$(cat "$dir/curl.args")" '/reply/r1?key=k' 'reply goes to the hub reply endpoint'
+    assert_equal 'тест' "$(cat "$dir/curl.body")" 'reply body reaches the hub'
+    assert_true 'telegram is not used when disabled' test ! -e "$dir/api.calls"
+    rm -f "$dir"/curl.* "$dir"/api.calls
+    HUB_FLAG=0 TG_FLAG=1 sh "$dir/run.sh" "$dir"
+    assert_true 'hub is not used when disabled' test ! -e "$dir/curl.calls"
+    assert_true 'telegram still gets the reply' test -e "$dir/api.calls"
+    rm -f "$dir"/curl.* "$dir"/api.calls
+    long=$(awk 'BEGIN { for (i = 0; i < 5000; i++) printf "a" }')
+    sed -i.bak "s/^reply 'тест'/reply '$long'/" "$dir/run.sh"
+    HUB_FLAG=1 TG_FLAG=0 sh "$dir/run.sh" "$dir"
+    assert_equal 4096 "$(wc -c < "$dir/curl.body" | tr -d ' ')" 'hub body is capped at 4096 bytes'
+    rm -f "$dir"/curl.* "$dir"/api.calls
+    CURL_RC=22 HUB_FLAG=1 TG_FLAG=1 sh "$dir/run.sh" "$dir"
+    assert_true 'a failing hub does not stop telegram' test -e "$dir/api.calls"
+    rm -rf "$dir"
+}
+
 test_move_is_checked_on_the_router() {
     command=$(cat "$PROJECT_DIR/runtime/router-provisioner-command")
     eval "$(sed -n '/^MOVE_HOSTS=/p; /^move_target_ok() {/,/^}/p' \
@@ -1454,5 +1574,9 @@ test_route_push_is_a_filter_not_a_command
 test_enroll_link_is_single_use
 test_upgrade_moves_hourly_refresh_to_night
 test_move_is_checked_on_the_router
+test_replies_reach_the_hub
+test_hub_enroll_token_is_extracted
+test_hub_step_never_aborts_the_run
+test_hub_page_is_wired_into_the_stack
 
 printf 'OK: %s assertions\n' "$TEST_COUNT"

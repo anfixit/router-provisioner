@@ -26,6 +26,22 @@
 		max_size 9MB
 	}
 
+	# Prometheus-style counters are for the box itself; the proxy must not
+	# hand them to the internet. Matched before the catch-all proxy below.
+	@metrics path /hub/metrics /hub/metrics/*
+	handle @metrics {
+		respond 404
+	}
+
+	# Browsers ask for it even when the page has a data: icon; an unanswered
+	# request would hit the catch-all 404 and count against the visitor.
+	handle /favicon.ico {
+		respond 204
+	}
+
+	# The page uses relative URLs, so it needs the trailing slash.
+	redir /hub /hub/ 308
+
 	handle_path /hub/* {
 		reverse_proxy hub:9095
 	}

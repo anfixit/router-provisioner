@@ -67,7 +67,7 @@ main() {
         fatal 'Не удалось создать временный каталог.'
 
     for module in \
-        common system netshift youtubeunblock adblock pinning lifecycle main; do
+        common system netshift youtubeunblock adblock pinning lifecycle hub main; do
         destination="$RUNTIME_DIR/${module}.sh"
         fetch_file "lib/${module}.sh" "$destination" || \
             fatal "Не удалось скачать lib/${module}.sh из ref ${REF}."

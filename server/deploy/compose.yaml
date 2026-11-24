@@ -17,8 +17,12 @@ services:
       HUB_STATE: /state
       HUB_PUBLIC_URL: https://${HUB_DOMAIN:?}/hub
       HUB_PUBLIC_IP: ${HUB_PUBLIC_IP:?}
+      HUB_ADMIN_PASSWORD_HASH: ${HUB_ADMIN_PASSWORD_HASH:-}
     volumes:
+      # Both paths are relative to this file: copy server/router-hub.py and
+      # server/hub-ui.html next to compose.yaml on the server.
       - ./router-hub.py:/app/router-hub.py:ro
+      - ./hub-ui.html:/app/hub-ui.html:ro
       - ./state:/state
     networks: [hub]
     restart: unless-stopped

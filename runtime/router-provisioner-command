@@ -216,7 +216,21 @@ fetch_updates() {
     return 1
 }
 
+# The hub gets every reply too: a router whose Telegram is blocked still has to
+# answer the control page. A hub failure is ignored - Telegram must not lose its
+# copy because the hub was down, and the cap is the hub's own body limit. The
+# body goes through a file because hub_curl may run curl twice (address, then
+# name) and a pipe would be empty on the second attempt.
 reply() {
+    if [ "$HUB" -eq 1 ]; then
+        body_file=$(mktemp 2>/dev/null) || body_file=''
+        if [ -n "$body_file" ]; then
+            printf '%s' "$1" | head -c 4096 > "$body_file"
+            hub_curl -m 20 --data-binary "@$body_file" \
+                "$HUB_URL/reply/$LABEL?key=$HUB_KEY" >/dev/null 2>&1 || true
+            rm -f "$body_file"
+        fi
+    fi
     [ "$TELEGRAM" -eq 1 ] || return 0
     api sendMessage --data-urlencode "chat_id=$CHAT_ID" \
         --data-urlencode "text=$1" >/dev/null 2>&1
